@@ -9,13 +9,24 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
+// ReviewAgent pairs a review-panel agent with a display label, so two entries
+// of the same agent type running on different models/binaries stay
+// distinguishable in logs and finding attribution.
+type ReviewAgent struct {
+	Agent agent.Agent
+	Label string
+}
+
 // StepContext provides shared resources to pipeline steps during execution.
 type StepContext struct {
-	Ctx              context.Context
-	Run              *db.Run
-	Repo             *db.Repo
-	WorkDir          string
-	Agent            agent.Agent
+	Ctx     context.Context
+	Run     *db.Run
+	Repo    *db.Repo
+	WorkDir string
+	Agent   agent.Agent
+	// ReviewAgents, when non-empty, is the multi-reviewer panel the review step
+	// fans out over. Empty means the review step uses the single Agent above.
+	ReviewAgents     []ReviewAgent
 	Config           *config.Config
 	DB               *db.DB
 	Log              func(string) // discrete log line (newline-terminated, user-visible + file)

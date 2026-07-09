@@ -18,6 +18,7 @@ const (
 	ProviderGitLab      Provider = "gitlab"
 	ProviderBitbucket   Provider = "bitbucket"
 	ProviderAzureDevOps Provider = "azuredevops"
+	ProviderGitea       Provider = "gitea"
 	ProviderUnknown     Provider = "unknown"
 )
 
@@ -28,6 +29,8 @@ func DetectProvider(url string) Provider {
 		return ProviderGitHub
 	case strings.Contains(lower, "gitlab.com") || strings.Contains(lower, "gitlab."):
 		return ProviderGitLab
+	case strings.Contains(lower, "gitea.") || strings.Contains(lower, "forgejo.") || strings.Contains(lower, "codeberg.org"):
+		return ProviderGitea
 	case strings.Contains(lower, "bitbucket.org"):
 		return ProviderBitbucket
 	case strings.Contains(lower, "dev.azure.com") || strings.Contains(lower, "visualstudio.com"):
@@ -52,9 +55,100 @@ func DetectProvider(url string) Provider {
 		if ghKnowsHost(host) {
 			return ProviderGitHub
 		}
+		// Fallback for self-hosted Gitea/Forgejo instances whose hostname
+		// carries no marker (e.g. a bare "localhost:3000"): treat the host as
+		// Gitea when it is listed in NO_MISTAKES_GITEA_HOSTS, or when the `tea`
+		// CLI has a login configured for it. Both read runtime config; no host
+		// is hardcoded.
+		if giteaHostFromEnv(host) {
+			return ProviderGitea
+		}
+		if teaKnowsHost(host) {
+			return ProviderGitea
+		}
 	}
 
 	return ProviderUnknown
+}
+
+// giteaHostFromEnv reports whether host appears in the comma-separated
+// NO_MISTAKES_GITEA_HOSTS environment variable. Host entries are compared with
+// their port stripped so "localhost" matches "localhost:3000".
+func giteaHostFromEnv(host string) bool {
+	raw := strings.TrimSpace(os.Getenv("NO_MISTAKES_GITEA_HOSTS"))
+	if raw == "" {
+		return false
+	}
+	host = strings.ToLower(host)
+	for _, entry := range strings.Split(raw, ",") {
+		e := strings.ToLower(strings.TrimSpace(entry))
+		if e == "" {
+			continue
+		}
+		if e == host || stripPort(e) == stripPort(host) {
+			return true
+		}
+	}
+	return false
+}
+
+// teaKnowsHost reports whether host appears as a login URL host in tea's
+// config.yml. Any read/parse error is treated as "not configured" so detection
+// fails closed to ProviderUnknown.
+func teaKnowsHost(host string) bool {
+	path := teaConfigPath()
+	if path == "" {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var cfg struct {
+		Logins []struct {
+			URL string `yaml:"url"`
+		} `yaml:"logins"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return false
+	}
+	host = strings.ToLower(host)
+	for _, login := range cfg.Logins {
+		if loginHost := ExtractHost(strings.TrimSpace(login.URL)); loginHost != "" && loginHost == host {
+			return true
+		}
+	}
+	return false
+}
+
+// teaConfigPath resolves tea's config.yml. It returns the first candidate that
+// exists, checking $TEA_CONFIG_HOME, $XDG_CONFIG_HOME/tea, the macOS
+// Application Support location (where tea writes when XDG_CONFIG_HOME is unset),
+// and finally ~/.config/tea. When none exist it returns the last candidate so
+// callers have a stable path to report.
+func teaConfigPath() string {
+	var candidates []string
+	if dir := os.Getenv("TEA_CONFIG_HOME"); dir != "" {
+		candidates = append(candidates, filepath.Join(dir, "config.yml"))
+	}
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		candidates = append(candidates, filepath.Join(dir, "tea", "config.yml"))
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		candidates = append(candidates,
+			filepath.Join(home, "Library", "Application Support", "tea", "config.yml"),
+			filepath.Join(home, ".config", "tea", "config.yml"),
+		)
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	if len(candidates) > 0 {
+		return candidates[len(candidates)-1]
+	}
+	return ""
 }
 
 // glabKnowsHost reports whether host appears in glab's configured hosts map,
@@ -158,6 +252,8 @@ func (p Provider) CLIName() string {
 		return "bb"
 	case ProviderAzureDevOps:
 		return "az"
+	case ProviderGitea:
+		return "tea"
 	default:
 		return ""
 	}
@@ -173,6 +269,8 @@ func (p Provider) AuthCheckCommand() []string {
 		return []string{"bb", "profile", "which"}
 	case ProviderAzureDevOps:
 		return []string{"az", "account", "show"}
+	case ProviderGitea:
+		return []string{"tea", "logins", "list"}
 	default:
 		return nil
 	}

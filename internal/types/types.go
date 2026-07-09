@@ -104,6 +104,15 @@ func AllSteps() []StepName {
 	return []StepName{StepIntent, StepRebase, StepReview, StepTest, StepDocument, StepLint, StepPush, StepPR, StepCI}
 }
 
+// IsMandatoryStep reports whether a step cannot be skipped — neither via the
+// --skip flag / push option nor a gate "skip" action. Review is mandatory so a
+// change always gets an independent read before it can pass the gate; without
+// this an agent could `--skip=review` (or skip the review gate) and ship
+// unreviewed code.
+func IsMandatoryStep(step StepName) bool {
+	return step == StepReview
+}
+
 // StepStatus represents the lifecycle state of a pipeline step.
 type StepStatus string
 

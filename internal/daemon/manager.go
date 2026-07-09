@@ -19,6 +19,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps"
+	"github.com/kunchenguid/no-mistakes/internal/scm/gitea"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -432,6 +433,42 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 		ag = agent.NewFallback(created)
 	}
 
+	// Build the review panel, if configured. Each reviewer is an independent
+	// agent (its model wired via agent_args_override) that reviews the diff on
+	// its own; the review step unions their findings. Reviewers are best-effort:
+	// one that cannot be constructed (e.g. missing binary) is skipped with a
+	// warning rather than failing the run, and an empty panel falls back to the
+	// single pipeline agent.
+	var reviewAgents []pipeline.ReviewAgent
+	if !steps.IsDemoMode() && len(cfg.Reviewers) > 0 {
+		for _, reviewer := range cfg.Reviewers {
+			binPath := reviewer.Path
+			if binPath == "" {
+				binPath = cfg.AgentPathFor(reviewer.Agent)
+			}
+			args := reviewer.Args
+			if len(args) == 0 {
+				args = cfg.AgentArgsFor(reviewer.Agent)
+			}
+			rev, revErr := agent.NewWithOptions(reviewer.Agent, binPath, args, agent.Options{
+				ACPRegistryOverrides: cfg.ACPRegistryOverrides,
+			})
+			if revErr != nil {
+				slog.Warn("skipping review agent", "run_id", run.ID, "agent", reviewer.Agent, "path", binPath, "error", revErr)
+				continue
+			}
+			label := reviewer.Label
+			if label == "" {
+				if reviewer.Path != "" {
+					label = filepath.Base(reviewer.Path)
+				} else {
+					label = string(reviewer.Agent)
+				}
+			}
+			reviewAgents = append(reviewAgents, pipeline.ReviewAgent{Agent: agent.WithSteering(rev), Label: label})
+		}
+	}
+
 	execSteps := m.steps()
 	telemetry.Track("run", telemetry.Fields{
 		"action":      "started",
@@ -445,6 +482,7 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 	// Create executor with event broadcast.
 	runCtx, cancel := context.WithCancelCause(context.Background())
 	executor := pipeline.NewExecutor(m.db, m.paths, cfg, ag, execSteps, m.broadcast)
+	executor.SetReviewAgents(reviewAgents)
 	executor.SetSkippedSteps(skipSteps)
 
 	// Track executor.
@@ -490,6 +528,9 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			}
 			cancel(nil)
 			ag.Close()
+			for _, rev := range reviewAgents {
+				rev.Agent.Close()
+			}
 			// Close subscriber channels for this run.
 			m.closeSubscribers(run.ID)
 			// Clean up worktree.
@@ -520,6 +561,7 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			}
 			telemetry.Track("run", fields)
 			slog.Error("pipeline failed", "run_id", run.ID, "error", err)
+			postGateStatus(run, wtDir, false)
 		} else {
 			telemetry.Track("run", telemetry.Fields{
 				"action":      "finished",
@@ -532,10 +574,57 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 				"pr_created":  run.PRURL != nil && *run.PRURL != "",
 			})
 			slog.Info("pipeline completed", "run_id", run.ID)
+			postGateStatus(run, wtDir, true)
 		}
 	}()
 
 	return run.ID, nil
+}
+
+// postGateStatus stamps the run's terminal outcome as a commit status on the
+// repo's Forgejo mirror, when a "forgejo" remote is configured. A Forgejo
+// branch-protection "required status check" (no-mistakes/gate) keys on this, so
+// a branch cannot merge into a protected branch unless the gate actually ran to
+// a terminal outcome — which closes the `git push --no-verify` bypass, because
+// the status is enforced server-side after the push lands.
+//
+// Best effort: an absent forgejo remote, a missing token, or an API error are
+// logged and ignored. Posting the gate status must never fail or block a run.
+func postGateStatus(run *db.Run, wtDir string, success bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	forgejoURL, err := git.GetRemoteURL(ctx, wtDir, "forgejo")
+	if err != nil || strings.TrimSpace(forgejoURL) == "" {
+		return // no Forgejo mirror for this repo — nothing to stamp
+	}
+	ref, err := gitea.ParseRepoRef(forgejoURL)
+	if err != nil {
+		slog.Debug("gate status: cannot parse forgejo remote", "url", forgejoURL, "err", err)
+		return
+	}
+	client, err := gitea.NewClientFromEnv(nil, ref)
+	if err != nil {
+		slog.Debug("gate status: no forgejo token", "err", err)
+		return
+	}
+	sha := strings.TrimSpace(run.HeadSHA)
+	if sha == "" {
+		return
+	}
+	state, desc := "success", "no-mistakes gate passed"
+	if !success {
+		state, desc = "failure", "no-mistakes gate did not pass"
+	}
+	targetURL := ""
+	if run.PRURL != nil {
+		targetURL = *run.PRURL
+	}
+	if err := client.SetCommitStatus(ctx, ref, sha, state, "no-mistakes/gate", desc, targetURL); err != nil {
+		slog.Warn("gate status post failed", "run_id", run.ID, "sha", sha, "err", err)
+		return
+	}
+	slog.Info("gate status posted", "run_id", run.ID, "sha", sha, "state", state)
 }
 
 func telemetryBranchRole(branch, defaultBranch string) string {

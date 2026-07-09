@@ -34,12 +34,13 @@ type approvalResponse struct {
 
 // Executor runs pipeline steps sequentially and coordinates approval interactions.
 type Executor struct {
-	db     *db.DB
-	paths  *paths.Paths
-	config *config.Config
-	agent  agent.Agent
-	steps  []Step
-	skips  map[types.StepName]bool
+	db           *db.DB
+	paths        *paths.Paths
+	config       *config.Config
+	agent        agent.Agent
+	reviewAgents []ReviewAgent
+	steps        []Step
+	skips        map[types.StepName]bool
 
 	onEvent EventFunc
 
@@ -47,6 +48,13 @@ type Executor struct {
 	approvalCh  chan approvalResponse // buffered channel for approval responses
 	waiting     bool                  // true when blocked on approval
 	waitingStep types.StepName        // which step is currently awaiting approval
+}
+
+// SetReviewAgents configures the multi-reviewer panel the review step fans out
+// over. When empty (the default), the review step uses the single pipeline
+// agent. Agents passed here are owned by the caller and closed by it.
+func (e *Executor) SetReviewAgents(agents []ReviewAgent) {
+	e.reviewAgents = agents
 }
 
 // SetSkippedSteps configures steps that should be marked skipped without running.
@@ -96,6 +104,12 @@ func (e *Executor) RespondWithOverrides(step types.StepName, action types.Approv
 	if step != e.waitingStep {
 		e.mu.Unlock()
 		return fmt.Errorf("step mismatch: responding to %q but %q is awaiting approval", step, e.waitingStep)
+	}
+	if action == types.ActionSkip && types.IsMandatoryStep(step) {
+		// Keep the run parked (e.waiting stays true) so the caller must respond
+		// again with approve or fix. Skipping the review gate is not allowed.
+		e.mu.Unlock()
+		return fmt.Errorf("step %q cannot be skipped: respond with approve or fix", step)
 	}
 	e.waiting = false
 	e.mu.Unlock()
@@ -280,6 +294,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		Repo:         repo,
 		WorkDir:      workDir,
 		Agent:        stepAgent,
+		ReviewAgents: e.reviewAgents,
 		Config:       e.config,
 		DB:           e.db,
 		StepResultID: sr.ID,
