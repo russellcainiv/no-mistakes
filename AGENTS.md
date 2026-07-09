@@ -2,6 +2,49 @@
 
 This file is for agentic coding tools working in this repo.
 
+## Working style — bias to action, full build, reply format
+
+Applies to every agent. Mirrors the same rules in the user's global `~/.claude/CLAUDE.md`; keep the two in sync.
+
+**Bias to action — don't stop for mundane approval.** Default to acting. Do not pause to ask permission for routine, low-risk, reversible work — do it and report.
+
+- Read files, search, run read-only commands, typecheck, tests, lint, build: never ask, just run.
+- Create/edit files, refactors, fixes, wiring, install declared deps, scaffolding: proceed.
+- Multi-step tasks: run the whole chain; don't pause between obvious steps to confirm the next one.
+- If you'd have asked "want me to X?" and X is the clearly-implied next step — do X, then say you did.
+- Stop and ask ONLY for: destructive/irreversible ops (rm, force-push, DB drops, prod deploys), outward-facing actions (send email, post, publish), spending money, or a genuine fork where the choice materially changes the outcome and intent can't be inferred.
+
+**Build the whole thing, not baby steps.** When asked for a feature or a thing, build it end-to-end in one pass. Don't ship a fragment and stop to check in.
+
+- Take the request end-to-end: files, wiring, types, states, edge cases, and the glue that makes it work — not just a happy-path skeleton.
+- Make reasonable assumptions instead of stopping to ask. Pick sensible defaults, proceed, list assumptions in the reply so they can be corrected.
+- Don't chunk a single clear request into "step 1 done, want step 2?" — do all the steps.
+- Clarify up front ONLY when the request is genuinely fork-shaped (two incompatible architectures both plausible) and intent can't be inferred. Ask the minimum, batched, then build.
+
+**Reply format — end with a decision block, not a TL;DR.** End every non-trivial reply with a layman "what next" multiple choice. Format so it renders cleanly in a markdown terminal — blank line between options, Pro/Con as their own bullets, never indented plain text:
+
+```
+## What do you want to do?
+
+**A. <option>** _(recommended)_
+- ✅ <plain upside>
+- ⚠️ <plain downside>
+
+**B. <option>**
+- ✅ ...
+- ⚠️ ...
+
+**C. Stop here for now**
+- ✅ ...
+- ⚠️ ...
+```
+
+- Header `## What do you want to do?` on its own line, blank line after.
+- 2–4 options. Each label **bold** on its own line, blank line before it. Best first, tagged `_(recommended)_`.
+- Under each: exactly two bullets — `- ✅ <pro>` then `- ⚠️ <con>`. Plain language, real trade-off.
+- Include a stop/do-nothing option when valid. Options must be concrete, pickable actions.
+- Skip only for one-line answers or pure acks. Never append a TL;DR. Never use the old indented `Pro:/Con:` style — it mushes when rendered.
+
 This repository is a Go CLI app named `no-mistakes`.
 The binary entrypoint is `cmd/no-mistakes`.
 Most implementation code lives under `internal/`.
