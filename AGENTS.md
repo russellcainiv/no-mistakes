@@ -21,29 +21,20 @@ Applies to every agent. Mirrors the same rules in the user's global `~/.claude/C
 - Don't chunk a single clear request into "step 1 done, want step 2?" — do all the steps.
 - Clarify up front ONLY when the request is genuinely fork-shaped (two incompatible architectures both plausible) and intent can't be inferred. Ask the minimum, batched, then build.
 
-**Reply format — end with a decision block, not a TL;DR.** End every non-trivial reply with a layman "what next" multiple choice. Format so it renders cleanly in a markdown terminal — blank line between options, Pro/Con as their own bullets, never indented plain text:
+**Reply format — end with a short decision block, not a TL;DR.** End every non-trivial reply with exactly three concrete next actions, one marked recommended. No pros/cons, no emoji:
 
 ```
 ## What do you want to do?
 
-**A. <option>** _(recommended)_
-- ✅ <plain upside>
-- ⚠️ <plain downside>
-
-**B. <option>**
-- ✅ ...
-- ⚠️ ...
-
-**C. Stop here for now**
-- ✅ ...
-- ⚠️ ...
+**A. <action>** (recommended) — <one-line what/why>
+**B. <action>** — <one-line>
+**C. <action>** — <one-line>
 ```
 
-- Header `## What do you want to do?` on its own line, blank line after.
-- 2–4 options. Each label **bold** on its own line, blank line before it. Best first, tagged `_(recommended)_`.
-- Under each: exactly two bullets — `- ✅ <pro>` then `- ⚠️ <con>`. Plain language, real trade-off.
-- Include a stop/do-nothing option when valid. Options must be concrete, pickable actions.
-- Skip only for one-line answers or pure acks. Never append a TL;DR. Never use the old indented `Pro:/Con:` style — it mushes when rendered.
+- Header `## What do you want to do?`, then three bold lettered actions (A/B/C), each on its own line.
+- Each action is one line: the step + a short plain reason. Best first, marked `(recommended)`.
+- Actions must be concrete, pickable next steps; include a stop/do-nothing option when valid.
+- Skip the block only for one-line answers or pure acks. Never append a TL;DR. No pros/cons bullets, no ✅/⚠️ emoji.
 
 This repository is a Go CLI app named `no-mistakes`.
 The binary entrypoint is `cmd/no-mistakes`.
