@@ -597,7 +597,9 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 // Best effort: an absent Forgejo target, a missing token, or an API error are
 // logged and ignored. Posting the gate status must never fail or block a run.
 func postGateStatus(run *db.Run, repo *db.Repo, wtDir string, success bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// context.Background() on purpose: this post runs after the run context is
+	// already cancelled (terminal outcome / panic), and it must still land.
+	ctx, cancel := context.WithTimeout(context.Background(), steps.GateStatusPostTimeout)
 	defer cancel()
 
 	targetURL := ""

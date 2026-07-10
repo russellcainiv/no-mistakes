@@ -223,6 +223,11 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	// Build step context with log callback that emits events and writes to file.
 	// lastChunkNewline tracks whether the most recent chunk ended with \n,
 	// so Log knows whether it needs a leading \n to flush a streaming partial.
+	// logMu serializes the log callbacks: the review panel fans out one
+	// goroutine per reviewer and each calls sctx.Log concurrently, so the
+	// closure state (lastChunkNewline, lastLogActivityAt) and the shared log
+	// file need a lock. touchLogActivity is only ever called under logMu.
+	var logMu sync.Mutex
 	lastChunkNewline := true
 	userIntent := ""
 	if run != nil && run.Intent != nil {
@@ -242,6 +247,8 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		}
 	}
 	writeLog := func(text string) {
+		logMu.Lock()
+		defer logMu.Unlock()
 		if text != "" {
 			prefix := ""
 			if !lastChunkNewline {
@@ -255,6 +262,8 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		touchLogActivity(text, true)
 	}
 	writeLogChunk := func(text string) {
+		logMu.Lock()
+		defer logMu.Unlock()
 		if text != "" {
 			lastChunkNewline = strings.HasSuffix(text, "\n")
 		}
@@ -302,6 +311,8 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		Log:          writeLog,
 		LogChunk:     writeLogChunk,
 		LogFile: func(text string) {
+			logMu.Lock()
+			defer logMu.Unlock()
 			fmt.Fprintln(logFile, text)
 			touchLogActivity(text, true)
 		},

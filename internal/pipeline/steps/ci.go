@@ -19,8 +19,12 @@ import (
 const (
 	defaultChecksGracePeriod          = 60 * time.Second
 	defaultBaseBranchTipResolveWindow = 30 * time.Second
-	gateStatusPostTimeout             = 15 * time.Second
 )
+
+// GateStatusPostTimeout bounds a single no-mistakes/gate commit-status post.
+// Shared by the CI step's decision-point stamps and the daemon's
+// terminal-outcome post.
+const GateStatusPostTimeout = 15 * time.Second
 
 // CI monitoring status messages. These are surfaced to the user and parsed by
 // the TUI and the agent-facing axi commands to distinguish passed checks from
@@ -398,7 +402,7 @@ func (s *CIStep) stampGate(sctx *pipeline.StepContext, success bool) {
 	if sctx.Run.PRURL != nil {
 		prURL = *sctx.Run.PRURL
 	}
-	ctx, cancel := context.WithTimeout(sctx.Ctx, gateStatusPostTimeout)
+	ctx, cancel := context.WithTimeout(sctx.Ctx, GateStatusPostTimeout)
 	defer cancel()
 	posted, err := post(ctx, sctx.Repo.UpstreamURL, sctx.WorkDir, sha, prURL, success)
 	if err != nil {
