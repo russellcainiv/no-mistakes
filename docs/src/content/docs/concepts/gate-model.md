@@ -70,6 +70,8 @@ That is a core design choice, not an implementation detail.
 - **Disposable worktrees** - each run happens in its own detached worktree under `~/.no-mistakes/worktrees/`. The daemon can safely modify files, run tests, and commit fixes without touching your working directory.
 - **Fixed pipeline** - the step order is opinionated and not configurable: `intent → rebase → review → test → document → lint → push → pr → ci`. What you _can_ configure is the commands each step runs, how many auto-fix attempts are allowed, and whether transcript-based intent extraction is used when intent is not supplied directly.
 - **Remote data-loss guard** - force-pushes are checked against the live push target and refused when they would discard commits the run did not incorporate.
+- **Unskippable review** - the review step cannot be skipped, whether via `--skip`, a Git push option, or a gate `skip` action; a change always gets an independent read before the gate passes.
+- **Server-side gate enforcement** - for a Gitea/Forgejo upstream, the daemon posts a `no-mistakes/gate` commit status so a branch-protection rule can require it, closing the `git push --no-verify` bypass. See [Provider Integration](/no-mistakes/guides/provider-integration/#server-side-gate-enforcement-branch-protection).
 
 ## Why it is built this way
 

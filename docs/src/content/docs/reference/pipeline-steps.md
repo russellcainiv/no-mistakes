@@ -9,7 +9,7 @@ This is the per-step reference. For the overview and rationale, see [Pipeline](/
 intent → rebase → review → test → document → lint → push → pr → ci
 ```
 
-Each step can produce findings, request approval, trigger auto-fix, or apply safe fixes during its own pass. Steps that encounter fatal errors stop the pipeline. Steps can also be pre-skipped when starting a run, skipped by the user, or skipped automatically by the pipeline.
+Each step can produce findings, request approval, trigger auto-fix, or apply safe fixes during its own pass. Steps that encounter fatal errors stop the pipeline. Steps can also be pre-skipped when starting a run, skipped by the user, or skipped automatically by the pipeline. **Review is mandatory** - `--skip`, the `no-mistakes.skip` push option, and the `axi respond --action skip` gate action all reject it, so a change always gets an independent read before the gate passes.
 In the TUI, yolo mode is an explicit override that auto-resolves paused steps: `auto-fix` and `ask-user` findings are fixed once with every finding selected, fix-review gates are approved, and gates with only `no-op` findings are approved as-is.
 Every pipeline agent invocation is prompt-steered to keep intentional writes inside the run worktree and avoid mutating system state outside it.
 This is a soft boundary, not OS-level sandbox enforcement.
@@ -57,7 +57,9 @@ Fetches the latest authoritative remote state, fetches the configured pushed-bra
 
 ## Review
 
-AI code review of your diff.
+AI code review of your diff. Cannot be skipped: `--skip`, the `no-mistakes.skip` push option, and the gate's `skip` action all reject `review` so a change always gets an independent read.
+
+By default a single agent (the pipeline agent) performs the review. Setting [`review.reviewers`](/no-mistakes/reference/global-config/#reviewreviewers) in global config turns this into a multi-reviewer panel - two or more agents review the diff independently and concurrently, and their findings are unioned and de-duplicated. See [Review Model Wiring & the Multi-Reviewer Panel](/no-mistakes/guides/review-panel/).
 
 **Behavior:**
 - Diffs the base commit against head
@@ -154,17 +156,18 @@ Creates or updates a pull request.
 
 **Skipped when:**
 - The branch is the default branch
-- The upstream host is not GitHub, GitLab, Bitbucket Cloud (`bitbucket.org`), or Azure DevOps (`dev.azure.com` / `*.visualstudio.com`)
+- The upstream host is not GitHub, GitLab, Bitbucket Cloud (`bitbucket.org`), Azure DevOps (`dev.azure.com` / `*.visualstudio.com`), or Gitea/Forgejo (self-hosted markers, `NO_MISTAKES_GITEA_HOSTS`, `codeberg.org`, or a `tea` login)
 - The provider CLI (`gh` or `glab`) is not installed for GitHub or GitLab
 - The provider CLI is not authenticated for GitHub or GitLab
 - Bitbucket Cloud credentials are missing (`NO_MISTAKES_BITBUCKET_EMAIL` or `NO_MISTAKES_BITBUCKET_API_TOKEN`)
 - The `az` CLI with the `azure-devops` extension is not installed or not authenticated for Azure DevOps
-- A legacy or manually edited GitLab, Bitbucket, or Azure DevOps repo record has `fork_url` set, because fork MR/PR routing is currently GitHub-only
+- No Gitea/Forgejo token can be resolved (`NO_MISTAKES_GITEA_API_TOKEN` or a matching `tea` login)
+- A legacy or manually edited GitLab, Bitbucket, Azure DevOps, or Gitea/Forgejo repo record has `fork_url` set, because fork MR/PR routing is currently GitHub-only
 
 **Behavior:**
 - Checks for an existing PR on the branch
 - If one exists, updates it. If not, creates a new one.
-- Uses the provider CLI for GitHub/GitLab, the `az` CLI for Azure DevOps, and the Bitbucket API for Bitbucket Cloud
+- Uses the provider CLI for GitHub/GitLab, the `az` CLI for Azure DevOps, the Bitbucket API for Bitbucket Cloud, and the Gitea/Forgejo REST API for Gitea/Forgejo
 - For GitHub fork routing, keeps `gh --repo` pointed at the parent repository from `origin`, checks existing PRs with the bare branch name, filters matching PRs by head owner, and creates PRs with `--head <fork-owner>:<branch>`
 - PR title: agent-generated with user intent when available, in conventional commit format (`type(scope): description` or `type: description`); user-facing product impact should use `feat` or `fix` so release automation can pick it up; when a scope is used, it should be the primary affected real module/package from the changed paths and kept broad rather than file-level
 - PR body includes a `## Intent` section when user intent is available, an agent-authored `## What Changed`, and regenerated `## Risk Assessment`, `## Testing`, and `## Pipeline` sections from recorded step results and rounds; auto-fix results in `## Pipeline` render as an issue -> fix -> verification narrative using captured fix summaries, re-check success text, and any still-open findings
@@ -179,37 +182,42 @@ Stores the PR URL in the database and streams it to the TUI.
 
 ## CI
 
-Monitors PR health after creation and auto-fixes CI failures. Mergeability polling and merge-conflict handling now apply to GitHub, GitLab, and Azure DevOps.
+Monitors PR health after creation and auto-fixes CI failures. Mergeability polling and merge-conflict handling now apply to GitHub, GitLab, Azure DevOps, and Gitea/Forgejo.
 
-**Active for GitHub, GitLab, Bitbucket Cloud (`bitbucket.org`), and Azure DevOps (`dev.azure.com` / `*.visualstudio.com`)**.
+**Active for GitHub, GitLab, Bitbucket Cloud (`bitbucket.org`), Azure DevOps (`dev.azure.com` / `*.visualstudio.com`), and Gitea/Forgejo**.
 
 - GitHub requires `gh` CLI, installed and authenticated.
 - GitLab requires `glab` CLI, installed and authenticated.
 - Bitbucket Cloud requires `NO_MISTAKES_BITBUCKET_EMAIL` and `NO_MISTAKES_BITBUCKET_API_TOKEN`.
 - Azure DevOps requires the `az` CLI with the `azure-devops` extension, authenticated with a PAT.
+- Gitea/Forgejo requires `NO_MISTAKES_GITEA_API_TOKEN` or a matching `tea` login.
 
 **Behavior:**
 - Polls provider CI status at increasing intervals: every 30s for the first 5 minutes, every 60s for 5-15 minutes, every 120s after that
 - Continues monitoring an open PR until it is merged, closed, declined, or the configured `ci_timeout` idle window elapses, even after CI checks are currently healthy
 - Treats `ci_timeout` as an idle timeout: each upstream default-branch advance re-arms the timer, and `ci_timeout: "unlimited"` disables self-termination
-- On GitHub, GitLab, and Azure DevOps, polls provider mergeability alongside CI checks while the PR remains open
+- On GitHub, GitLab, Azure DevOps, and Gitea/Forgejo, polls provider mergeability alongside CI checks while the PR remains open
 - While the PR stays open, the TUI and terminal title show `Checks passed` once checks are green and known mergeability is clear, and `no-mistakes axi` returns `outcome: checks-passed` with successful-output reporting instructions so agents can summarize the run, ask the user to review and merge, and list any pipeline fixes instead of waiting
-- If the default branch moves after `checks-passed`, keeps watching the same PR; a clean behind PR needs no action, while an actual GitHub, GitLab, or Azure DevOps merge conflict is auto-fixed by rebasing onto the base and re-pushing through the force-push safety guard
+- If the default branch moves after `checks-passed`, keeps watching the same PR; a clean behind PR needs no action, while an actual GitHub, GitLab, Azure DevOps, or Gitea/Forgejo merge conflict is auto-fixed by rebasing onto the base and re-pushing through the force-push safety guard
 - The ready signal clears if checks start running again, new failures appear, provider state becomes uncertain, or the PR is merged, closed, or declined
 - Waits a 60s grace period before trusting empty results (CI checks may not have registered yet)
-- If CI failures or, on GitHub, GitLab, or Azure DevOps, a merge conflict are already known while other checks are still pending: waits for all checks to finish before attempting an auto-fix
-- On CI failure: fetches failed job logs (GitHub via `gh run view --log-failed`, GitLab via `glab ci trace`, Bitbucket Cloud via failed pipeline step logs; Azure DevOps has no first-class build-log command, so the agent fixes from the failing-check list without logs), sends them to the agent with user intent when available, and, if the agent produces changes, commits them and uses the same force-push safety guard as the push step
-- On GitHub, GitLab, or Azure DevOps merge conflict: asks the agent to rebase onto the latest default-branch tip and make the smallest correct root-cause fix for the conflicts, using user intent when available
-- If both CI failures and a GitHub, GitLab, or Azure DevOps merge conflict are present: fixes both in the same attempt
+- If CI failures or, on GitHub, GitLab, Azure DevOps, or Gitea/Forgejo, a merge conflict are already known while other checks are still pending: waits for all checks to finish before attempting an auto-fix
+- On CI failure: fetches failed job logs (GitHub via `gh run view --log-failed`, GitLab via `glab ci trace`, Bitbucket Cloud via failed pipeline step logs; Azure DevOps and Gitea/Forgejo have no first-class build-log command, so the agent fixes from the failing-check list without logs), sends them to the agent with user intent when available, and, if the agent produces changes, commits them and uses the same force-push safety guard as the push step
+- On GitHub, GitLab, Azure DevOps, or Gitea/Forgejo merge conflict: asks the agent to rebase onto the latest default-branch tip and make the smallest correct root-cause fix for the conflicts, using user intent when available
+- If both CI failures and a GitHub, GitLab, Azure DevOps, or Gitea/Forgejo merge conflict are present: fixes both in the same attempt
 - If a fix attempt produces no changes: automatic mode leaves the failure undeduplicated so it can retry until the auto-fix limit, while manual fix mode returns immediately for manual intervention
 - Deduplicates fix attempts only after a fix is actually committed and pushed
 - Exits cleanly when the PR is merged, closed, or declined
 - If the idle timeout is reached while the PR is still open: pauses for user approval, even when CI checks are currently healthy
-- If the idle timeout is reached while CI failures or, on GitHub, GitLab, or Azure DevOps, a merge conflict are still known: pauses for user approval with findings for the remaining issues
-- If the idle timeout is reached while GitHub, GitLab, or Azure DevOps PR mergeability is still unresolved: pauses for user approval with a finding describing the unresolved mergeability state
-- If CI failures or a GitHub, GitLab, or Azure DevOps merge conflict persist after the auto-fix limit: pauses for user approval with findings listing each failing check and/or the merge conflict
+- If the idle timeout is reached while CI failures or, on GitHub, GitLab, Azure DevOps, or Gitea/Forgejo, a merge conflict are still known: pauses for user approval with findings for the remaining issues
+- If the idle timeout is reached while GitHub, GitLab, Azure DevOps, or Gitea/Forgejo PR mergeability is still unresolved: pauses for user approval with a finding describing the unresolved mergeability state
+- If CI failures or a GitHub, GitLab, Azure DevOps, or Gitea/Forgejo merge conflict persist after the auto-fix limit: pauses for user approval with findings listing each failing check and/or the merge conflict
 
 **Default auto-fix limit:** `3` total CI auto-fix attempts.
+
+### Server-side gate status (Gitea/Forgejo)
+
+For a Gitea/Forgejo upstream (or a repo with a `forgejo` remote configured), the CI step stamps a `no-mistakes/gate` commit status on the head SHA as soon as the monitor reaches a decision point - `success` at `checks-passed`, `failure` when the monitor gives up on failing checks - instead of waiting for the run's terminal outcome, which would deadlock behind a branch-protection rule that requires that same status. The daemon's terminal-outcome post is the final overwrite; a cancelled run does not downgrade a truthful success stamp. See [Server-side gate enforcement](/no-mistakes/guides/provider-integration/#server-side-gate-enforcement-branch-protection).
 
 ## Step statuses
 

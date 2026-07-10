@@ -25,7 +25,7 @@ You need:
 
 - `git`
 - One supported agent binary (`claude`, `codex`, `acli` for Rovo Dev, `opencode`, `pi`, or `copilot`), or a separately installed `acpx` binary for `agent: acp:<target>`
-- For PRs and CI: `gh` (GitHub), `glab` (GitLab), Bitbucket Cloud credentials, or `az` with the `azure-devops` extension (Azure DevOps)
+- For PRs and CI: `gh` (GitHub), `glab` (GitLab), Bitbucket Cloud credentials, `az` with the `azure-devops` extension (Azure DevOps), or a Gitea/Forgejo API token / `tea` login (Gitea/Forgejo)
 
 For ACP agents, verify `acpx` or `acpx_path` separately because `no-mistakes doctor` does not validate ACP targets.
 

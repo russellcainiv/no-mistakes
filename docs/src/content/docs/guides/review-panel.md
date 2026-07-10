@@ -1,8 +1,11 @@
-# Review model wiring & the multi-reviewer panel
+---
+title: Review Model Wiring & the Multi-Reviewer Panel
+description: Point the review step at a different model, or run two or more reviewers as a panel.
+---
 
 The review step is the pipeline stage that reads your diff and produces findings
 (bugs, risks, simplifications). By default a **single** agent performs it — the
-same agent that drives the rest of the pipeline. This document covers two
+same agent that drives the rest of the pipeline. This guide covers two
 things:
 
 1. How to wire the reviewer to a **different model**.
@@ -33,17 +36,19 @@ agent_args_override:
 ```
 
 This is **global** to the run — it changes the model for every agent-backed
-step (review, test-fix, document, PR summary), not review alone.
+step (review, test-fix, document, PR summary), not review alone. See
+[Global Config Reference](/no-mistakes/reference/global-config/#agent_args_override).
 
 ---
 
 ## 2. The multi-reviewer panel
 
-Set `review.reviewers` to a list of two or more reviewers and the review step
-becomes a **panel**: every reviewer reviews the diff **independently and
-concurrently**, and their findings are **unioned and de-duplicated**. A problem
-that *either* reviewer catches surfaces at the gate. This trades tokens/latency
-for coverage — two models rarely miss the same bug.
+Set [`review.reviewers`](/no-mistakes/reference/global-config/#reviewreviewers)
+to a list of two or more reviewers and the review step becomes a **panel**:
+every reviewer reviews the diff **independently and concurrently**, and their
+findings are **unioned and de-duplicated**. A problem that *either* reviewer
+catches surfaces at the gate. This trades tokens/latency for coverage — two
+models rarely miss the same bug.
 
 Each reviewer entry has:
 
@@ -95,15 +100,18 @@ review:
 
 - **Union + de-dup.** Findings from all reviewers are combined. Two findings are
   considered the same when they share file, line, and description (case- and
-  whitespace-insensitive); duplicates collapse to one.
+  whitespace-insensitive); duplicates collapse to one, keeping the highest
+  severity any reviewer assigned to that finding.
 - **Attribution.** Each finding is tagged with the reviewer's `label` in its
   `source` field (unless the agent already attributed it).
 - **Risk escalation.** The panel's risk level is the **highest** any reviewer
   assigned — one high-risk reviewer escalates the whole panel.
-- **Best effort.** A reviewer whose binary can't be constructed (missing
-  wrapper, bad path) is **skipped with a warning** rather than failing the run.
-  If *every* reviewer fails, the step errors. An empty/omitted `reviewers` list
-  falls back to the single pipeline agent (the default behavior).
+- **Best effort, but not silent.** A reviewer whose binary can't be constructed
+  (missing wrapper, bad path) is **skipped with a warning** rather than failing
+  the run. If *every* configured reviewer fails to construct, the step errors
+  instead of silently degrading to a single-agent review. An empty/omitted
+  `reviewers` list falls back to the single pipeline agent (the default
+  behavior).
 - **Streaming.** With one reviewer, its output streams live. With a panel,
   per-reviewer streams are suppressed to avoid interleaving; you get a
   start line and a finding-count line per reviewer instead.
@@ -113,4 +121,4 @@ review:
 `review.reviewers` only changes the **review** step. Every other step (test,
 document, PR, CI) still uses the single pipeline `agent`. The panel does not
 change how findings are approved — the same gate/approval flow applies to the
-unioned set.
+unioned set, and [review remains a mandatory step](/no-mistakes/reference/pipeline-steps/#review) that cannot be skipped.

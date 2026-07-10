@@ -66,7 +66,7 @@ Nothing reaches the configured push target until every check is green.
 
 The **review** step can be pointed at a different model, or run as a
 **multi-reviewer panel** — two or more models reviewing the same diff with their
-findings unioned. See [docs/review-panel.md](docs/review-panel.md).
+findings unioned. See [Review Model Wiring & the Multi-Reviewer Panel](https://kunchenguid.github.io/no-mistakes/guides/review-panel/).
 
 ## Install
 

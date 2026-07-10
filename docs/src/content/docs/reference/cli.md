@@ -20,6 +20,7 @@ no-mistakes --skip test,lint
 Unlike `no-mistakes attach`, bare `no-mistakes` only auto-attaches to an active run on the current branch.
 `--skip` only applies when bare `no-mistakes` starts a new pipeline run through the wizard; it does not skip a step on an already-active run.
 Valid step names are `intent`, `rebase`, `review`, `test`, `document`, `lint`, `push`, `pr`, and `ci`.
+`review` is mandatory and cannot be named here; passing it (alone or mixed with other steps) is rejected with an error instead of silently dropping it.
 
 ## no-mistakes init
 
@@ -38,7 +39,7 @@ Creates or refreshes a local bare repo, installs the post-receive hook, best-eff
 `init` writes no skill files into the repo; the user-level copies cover every supported agent (`~/.claude/skills` for Claude Code, `~/.agents/skills` for Codex, OpenCode, Rovo Dev, and Pi) across all repos.
 If the home `.claude` links to `.agents`, `.claude/skills` links to `.agents/skills`, or the reverse, `init` follows that layout and still makes the skill readable from both logical paths.
 If the repo still contains a vendored skill copy written by an older no-mistakes version, `init` leaves it untouched and prints a notice that it is no longer needed and can be removed.
-The gate advertises Git push-option support, so you can skip steps for one push with `git push -o no-mistakes.skip=test,lint no-mistakes <branch>`.
+The gate advertises Git push-option support, so you can skip steps for one push with `git push -o no-mistakes.skip=test,lint no-mistakes <branch>`. `review` cannot be skipped this way either; a push option naming it fails the same as `--skip=review`.
 
 For GitHub fork contributions, keep `origin` pointed at the parent repository and pass `--fork-url` with your fork remote URL.
 The push, rebase branch-sync, and CI auto-fix pushes use the fork, while GitHub PR and CI commands stay scoped to the parent repository and create PRs with `--head <fork-owner>:<branch>`.
@@ -90,6 +91,7 @@ no-mistakes axi run --intent "the user's goal" --yes
 | `-y`, `--yes` | `bool`   | `false` | Auto-resolve every gate until a decision point or outcome        |
 | `--skip`      | `string` | (none)  | Comma-separated pipeline steps to skip                           |
 
+`--skip` rejects `review`; the review gate is mandatory and cannot be skipped by a run parameter.
 `--intent` is not a description of the diff.
 It is the user's goal or request, and no-mistakes uses it verbatim instead of transcript inference.
 Err on the side of completeness: include the goal, important decisions and tradeoffs, constraints or approaches ruled in or out, and explicit requests that might otherwise look surprising in the diff.
@@ -130,6 +132,7 @@ no-mistakes axi respond --action skip
 | `--add-finding`  | `string` | (none)        | JSON finding object to add and fix                                   |
 | `-y`, `--yes`    | `bool`   | `false`       | Auto-resolve every subsequent gate until a decision point or outcome |
 
+`--action skip` is rejected at the review gate; review is mandatory and has no skip path.
 After the explicit response, `--yes` uses the same auto-resolution behavior as `axi run --yes`: have the pipeline fix `auto-fix` and `ask-user` findings once, approve the fix review, approve gates that only contain non-actionable `no-op` findings, and stop at `outcome: checks-passed` when CI is green but the PR still needs a human merge.
 Each `axi respond` blocks until the next gate, CI-ready decision point, or final outcome.
 If it returns another `gate:`, answer that gate; do not idle-wait for the run to move forward by itself.
@@ -298,7 +301,7 @@ Uses indicators: `✓` (available), `–` (not found, optional), `✗` (problem 
 
 `doctor` does not validate `acpx` or ACP targets. For `agent: acp:<target>`, verify `acpx_path` yourself.
 
-`doctor` checks `gh` and `az` availability. For GitLab PR and CI steps, install and authenticate `glab`. For Bitbucket Cloud PR and CI steps, set `NO_MISTAKES_BITBUCKET_EMAIL` and `NO_MISTAKES_BITBUCKET_API_TOKEN`. For Azure DevOps PR and CI steps, install the `azure-devops` extension and provide a PAT.
+`doctor` checks `gh` and `az` availability. For GitLab PR and CI steps, install and authenticate `glab`. For Bitbucket Cloud PR and CI steps, set `NO_MISTAKES_BITBUCKET_EMAIL` and `NO_MISTAKES_BITBUCKET_API_TOKEN`. For Azure DevOps PR and CI steps, install the `azure-devops` extension and provide a PAT. For Gitea/Forgejo PR and CI steps, set `NO_MISTAKES_GITEA_API_TOKEN` or authenticate a login with the `tea` CLI.
 
 ## no-mistakes update
 
