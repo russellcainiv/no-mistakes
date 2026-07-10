@@ -34,12 +34,13 @@ type approvalResponse struct {
 
 // Executor runs pipeline steps sequentially and coordinates approval interactions.
 type Executor struct {
-	db     *db.DB
-	paths  *paths.Paths
-	config *config.Config
-	agent  agent.Agent
-	steps  []Step
-	skips  map[types.StepName]bool
+	db           *db.DB
+	paths        *paths.Paths
+	config       *config.Config
+	agent        agent.Agent
+	reviewAgents []ReviewAgent
+	steps        []Step
+	skips        map[types.StepName]bool
 
 	onEvent EventFunc
 
@@ -49,7 +50,17 @@ type Executor struct {
 	waitingStep types.StepName        // which step is currently awaiting approval
 }
 
+// SetReviewAgents configures the multi-reviewer panel the review step fans out
+// over. When empty (the default), the review step uses the single pipeline
+// agent. Agents passed here are owned by the caller and closed by it.
+func (e *Executor) SetReviewAgents(agents []ReviewAgent) {
+	e.reviewAgents = agents
+}
+
 // SetSkippedSteps configures steps that should be marked skipped without running.
+// Mandatory steps are dropped here as the server-side backstop: the CLI already
+// rejects them, but IPC params (push options, rerun) reach this point verbatim
+// and must not be able to skip the review gate.
 func (e *Executor) SetSkippedSteps(steps []types.StepName) {
 	if len(steps) == 0 {
 		e.skips = nil
@@ -57,6 +68,9 @@ func (e *Executor) SetSkippedSteps(steps []types.StepName) {
 	}
 	e.skips = make(map[types.StepName]bool, len(steps))
 	for _, step := range steps {
+		if types.IsMandatoryStep(step) {
+			continue
+		}
 		e.skips[step] = true
 	}
 }
@@ -96,6 +110,12 @@ func (e *Executor) RespondWithOverrides(step types.StepName, action types.Approv
 	if step != e.waitingStep {
 		e.mu.Unlock()
 		return fmt.Errorf("step mismatch: responding to %q but %q is awaiting approval", step, e.waitingStep)
+	}
+	if action == types.ActionSkip && types.IsMandatoryStep(step) {
+		// Keep the run parked (e.waiting stays true) so the caller must respond
+		// again with approve or fix. Skipping the review gate is not allowed.
+		e.mu.Unlock()
+		return fmt.Errorf("step %q cannot be skipped: respond with approve or fix", step)
 	}
 	e.waiting = false
 	e.mu.Unlock()
@@ -209,6 +229,11 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	// Build step context with log callback that emits events and writes to file.
 	// lastChunkNewline tracks whether the most recent chunk ended with \n,
 	// so Log knows whether it needs a leading \n to flush a streaming partial.
+	// logMu serializes the log callbacks: the review panel fans out one
+	// goroutine per reviewer and each calls sctx.Log concurrently, so the
+	// closure state (lastChunkNewline, lastLogActivityAt) and the shared log
+	// file need a lock. touchLogActivity is only ever called under logMu.
+	var logMu sync.Mutex
 	lastChunkNewline := true
 	userIntent := ""
 	if run != nil && run.Intent != nil {
@@ -228,6 +253,8 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		}
 	}
 	writeLog := func(text string) {
+		logMu.Lock()
+		defer logMu.Unlock()
 		if text != "" {
 			prefix := ""
 			if !lastChunkNewline {
@@ -241,6 +268,8 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		touchLogActivity(text, true)
 	}
 	writeLogChunk := func(text string) {
+		logMu.Lock()
+		defer logMu.Unlock()
 		if text != "" {
 			lastChunkNewline = strings.HasSuffix(text, "\n")
 		}
@@ -280,6 +309,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		Repo:         repo,
 		WorkDir:      workDir,
 		Agent:        stepAgent,
+		ReviewAgents: e.reviewAgents,
 		Config:       e.config,
 		DB:           e.db,
 		StepResultID: sr.ID,
@@ -287,6 +317,8 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		Log:          writeLog,
 		LogChunk:     writeLogChunk,
 		LogFile: func(text string) {
+			logMu.Lock()
+			defer logMu.Unlock()
 			fmt.Fprintln(logFile, text)
 			touchLogActivity(text, true)
 		},
@@ -310,8 +342,10 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			// often carries the only detail of why the step failed (e.g. git
 			// stderr from a rejected push); without this the step log shows the
 			// work starting but never why it stopped.
+			logMu.Lock()
 			fmt.Fprintf(logFile, "\nerror: %s\n", err.Error())
 			touchLogActivity("error: "+err.Error(), true)
+			logMu.Unlock()
 			if dbErr := e.db.FailStep(sr.ID, err.Error(), durationMS); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}

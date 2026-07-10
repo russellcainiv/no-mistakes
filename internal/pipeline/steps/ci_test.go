@@ -3,6 +3,8 @@ package steps
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -990,5 +992,255 @@ func TestCIStep_UnlimitedTimeoutNeverExpires(t *testing.T) {
 	}
 	if !noTimeoutLog {
 		t.Fatalf("expected the no-timeout monitoring log, got: %v", logs)
+	}
+}
+
+type gateStamp struct {
+	sha     string
+	prURL   string
+	success bool
+}
+
+func TestPostGateStatusResolution(t *testing.T) {
+	calls := 0
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	t.Setenv("NO_MISTAKES_GITEA_API_TOKEN", "tok")
+	// Allowlist the httptest host so DetectProvider resolves the bare
+	// 127.0.0.1 upstream to Gitea — the same shape as a localhost Forgejo.
+	t.Setenv("NO_MISTAKES_GITEA_HOSTS", "127.0.0.1")
+
+	// Gitea upstream, no forgejo remote (run-worktree shape): stamps upstream.
+	plainDir := t.TempDir()
+	posted, err := PostGateStatus(context.Background(), srv.URL+"/russell/lvl2.git", plainDir, "abc123", "http://pr", true)
+	if err != nil || !posted {
+		t.Fatalf("gitea upstream: posted=%v err=%v, want posted", posted, err)
+	}
+	if gotPath != "/api/v1/repos/russell/lvl2/statuses/abc123" {
+		t.Errorf("path = %q", gotPath)
+	}
+
+	// Non-gitea upstream, no forgejo remote: nothing to stamp.
+	before := calls
+	posted, err = PostGateStatus(context.Background(), "https://github.com/o/r.git", plainDir, "abc123", "", true)
+	if posted || err != nil || calls != before {
+		t.Fatalf("github upstream, no mirror: posted=%v err=%v calls=%d, want no-op", posted, err, calls)
+	}
+
+	// Non-gitea upstream with a forgejo mirror remote: stamps the mirror.
+	mirrorDir := t.TempDir()
+	gitCmd(t, mirrorDir, "init")
+	gitCmd(t, mirrorDir, "remote", "add", "forgejo", srv.URL+"/russell/mirror.git")
+	posted, err = PostGateStatus(context.Background(), "https://github.com/o/r.git", mirrorDir, "abc123", "", true)
+	if err != nil || !posted {
+		t.Fatalf("forgejo mirror: posted=%v err=%v, want posted", posted, err)
+	}
+	if gotPath != "/api/v1/repos/russell/mirror/statuses/abc123" {
+		t.Errorf("mirror path = %q", gotPath)
+	}
+}
+
+func TestCIStep_StampsGateSuccessOncePerHeadSHA(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	// Two checks-passed polls on the same head SHA must stamp exactly once.
+	checksSequence := []string{
+		`[{"name":"build","state":"SUCCESS","bucket":"pass"}]`,
+		`[{"name":"build","state":"SUCCESS","bucket":"pass"}]`,
+	}
+	env := fakeCIGHSequence(t, "OPEN", checksSequence)
+
+	prURL := "https://github.com/test/repo/pull/42"
+	ag := &mockAgent{name: "test"}
+	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Run.PRURL = &prURL
+	sctx.Config.CITimeout = 10 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sctx.Ctx = ctx
+
+	var stamps []gateStamp
+	pollCount := 0
+	step := &CIStep{
+		postGateStatus: func(_ context.Context, _, _, sha, prURL string, success bool) (bool, error) {
+			stamps = append(stamps, gateStamp{sha, prURL, success})
+			return true, nil
+		},
+		waitForNextPoll: func(ctx context.Context, _ time.Duration) error {
+			pollCount++
+			if pollCount == 1 {
+				return nil
+			}
+			cancel()
+			return ctx.Err()
+		},
+	}
+	if _, err := step.Execute(sctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected monitoring to continue, got %v", err)
+	}
+	if len(stamps) != 1 {
+		t.Fatalf("gate stamped %d times over two checks-passed polls, want once: %+v", len(stamps), stamps)
+	}
+	if stamps[0].sha != headSHA || stamps[0].prURL != prURL || !stamps[0].success {
+		t.Fatalf("stamp = %+v, want success for %s / %s", stamps[0], headSHA, prURL)
+	}
+}
+
+func TestCIStep_StampsGateSuccessWhenNoChecksReported(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	// The zero-external-CI repo path: no checks ever register, but the gate
+	// stamp must still land or branch protection deadlocks the merge.
+	checksSequence := []string{`[]`, `[]`}
+	env := fakeCIGHSequence(t, "OPEN", checksSequence)
+
+	prURL := "https://github.com/test/repo/pull/42"
+	ag := &mockAgent{name: "test"}
+	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Run.PRURL = &prURL
+	sctx.Config.CITimeout = 10 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sctx.Ctx = ctx
+
+	var stamps []gateStamp
+	pollCount := 0
+	step := &CIStep{
+		checksGracePeriod: time.Nanosecond,
+		postGateStatus: func(_ context.Context, _, _, sha, prURL string, success bool) (bool, error) {
+			stamps = append(stamps, gateStamp{sha, prURL, success})
+			return true, nil
+		},
+		waitForNextPoll: func(ctx context.Context, _ time.Duration) error {
+			pollCount++
+			if pollCount == 1 {
+				return nil
+			}
+			cancel()
+			return ctx.Err()
+		},
+	}
+	if _, err := step.Execute(sctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected monitoring to continue, got %v", err)
+	}
+	if len(stamps) != 1 {
+		t.Fatalf("gate stamped %d times on the no-checks path, want once: %+v", len(stamps), stamps)
+	}
+	if stamps[0].sha != headSHA || !stamps[0].success {
+		t.Fatalf("stamp = %+v, want success for %s", stamps[0], headSHA)
+	}
+}
+
+func TestCIStep_StampsGateFailureWhenManualInterventionNeeded(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	// Completed failing checks with auto-fix disabled: the monitor gives up
+	// for manual intervention and must stamp failure, not leave the SHA
+	// statusless (or worse, carrying an earlier stale success).
+	checksSequence := []string{
+		`[{"name":"build","state":"FAILURE","bucket":"fail"}]`,
+	}
+	env := fakeCIGHSequence(t, "OPEN", checksSequence)
+
+	prURL := "https://github.com/test/repo/pull/42"
+	ag := &mockAgent{name: "test"}
+	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Run.PRURL = &prURL
+	sctx.Config.CITimeout = 10 * time.Second
+	sctx.Config.AutoFix.CI = 0
+
+	var stamps []gateStamp
+	step := &CIStep{
+		postGateStatus: func(_ context.Context, _, _, sha, prURL string, success bool) (bool, error) {
+			stamps = append(stamps, gateStamp{sha, prURL, success})
+			return true, nil
+		},
+	}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if outcome == nil || !outcome.NeedsApproval {
+		t.Fatalf("expected manual-intervention outcome, got %+v", outcome)
+	}
+	if len(stamps) != 1 {
+		t.Fatalf("gate stamped %d times, want one failure stamp: %+v", len(stamps), stamps)
+	}
+	if stamps[0].sha != headSHA || stamps[0].success {
+		t.Fatalf("stamp = %+v, want failure for %s", stamps[0], headSHA)
+	}
+}
+
+func TestCIStep_GateStampRetriesAfterPostError(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	checksSequence := []string{
+		`[{"name":"build","state":"SUCCESS","bucket":"pass"}]`,
+		`[{"name":"build","state":"SUCCESS","bucket":"pass"}]`,
+	}
+	env := fakeCIGHSequence(t, "OPEN", checksSequence)
+
+	prURL := "https://github.com/test/repo/pull/42"
+	ag := &mockAgent{name: "test"}
+	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Run.PRURL = &prURL
+	sctx.Config.CITimeout = 10 * time.Second
+
+	var logs []string
+	sctx.Log = func(s string) { logs = append(logs, s) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sctx.Ctx = ctx
+
+	posts := 0
+	pollCount := 0
+	step := &CIStep{
+		postGateStatus: func(_ context.Context, _, _, sha, _ string, _ bool) (bool, error) {
+			posts++
+			if posts == 1 {
+				return false, errors.New("forgejo unreachable")
+			}
+			if sha != headSHA {
+				t.Errorf("retry stamped %q, want %q", sha, headSHA)
+			}
+			return true, nil
+		},
+		waitForNextPoll: func(ctx context.Context, _ time.Duration) error {
+			pollCount++
+			if pollCount == 1 {
+				return nil
+			}
+			cancel()
+			return ctx.Err()
+		},
+	}
+	if _, err := step.Execute(sctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected monitoring to continue, got %v", err)
+	}
+	if posts != 2 {
+		t.Fatalf("expected a failed post then a retry on the next poll, got %d posts", posts)
+	}
+	warned := false
+	for _, l := range logs {
+		if strings.Contains(l, "could not post no-mistakes/gate status") {
+			warned = true
+			break
+		}
+	}
+	if !warned {
+		t.Fatalf("expected a gate-post warning log, got: %v", logs)
 	}
 }

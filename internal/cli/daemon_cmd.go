@@ -122,6 +122,9 @@ func parseSkipSteps(value string) ([]types.StepName, error) {
 		if !validStep(step) {
 			return nil, fmt.Errorf("unknown step %q", step)
 		}
+		if types.IsMandatoryStep(step) {
+			return nil, fmt.Errorf("step %q cannot be skipped: the review gate is mandatory", step)
+		}
 		steps = append(steps, step)
 	}
 	return dedupeSteps(steps), nil

@@ -53,6 +53,7 @@ make install
   - `glab` CLI (GitLab)
   - `NO_MISTAKES_BITBUCKET_EMAIL` and `NO_MISTAKES_BITBUCKET_API_TOKEN` (Bitbucket Cloud)
   - `az` CLI with the `azure-devops` extension (Azure DevOps)
+  - `NO_MISTAKES_GITEA_API_TOKEN` or a `tea` login (Gitea/Forgejo)
 
 Run `no-mistakes doctor` to check native agents and provider tools.
 For ACP agents, verify `acpx` or `acpx_path` separately because `doctor` does not validate ACP targets.

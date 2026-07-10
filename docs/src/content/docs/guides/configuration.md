@@ -79,9 +79,10 @@ agent_args_override:
     - -c
     - model_reasoning_effort="low"
 
-# How long the CI step monitors an open PR (provider CI status plus GitHub/GitLab
-# mergeability) with no base-branch movement before giving up. Each base-branch
-# advance re-arms the timer, so an actively-updated green PR keeps its monitor.
+# How long the CI step monitors an open PR (provider CI status plus GitHub/GitLab/
+# Azure DevOps/Gitea/Forgejo mergeability) with no base-branch movement before
+# giving up. Each base-branch advance re-arms the timer, so an actively-updated
+# green PR keeps its monitor.
 # Use "unlimited" (or aliases "none", "off", "never", or any non-positive
 # duration) to monitor until the PR is merged, closed, or aborted.
 ci_timeout: "168h" # any Go duration string, or an unlimited keyword
@@ -133,6 +134,12 @@ Bitbucket Cloud PR creation and CI monitoring use environment variables instead 
 - `NO_MISTAKES_BITBUCKET_API_BASE_URL` - optional API base URL override
 
 Azure DevOps uses the `az` CLI with the `azure-devops` extension; for non-interactive auth the daemon inherits a Personal Access Token from `AZURE_DEVOPS_EXT_PAT`.
+
+Gitea/Forgejo talks to the `/api/v1` REST API directly, no CLI required:
+
+- `NO_MISTAKES_GITEA_API_TOKEN` - falls back to the token recorded by `tea login add` when unset
+- `NO_MISTAKES_GITEA_API_BASE_URL` - optional API base URL override, required for SSH remotes
+- `NO_MISTAKES_GITEA_HOSTS` - comma-separated hostnames to treat as Gitea/Forgejo when the host carries no `gitea.`/`forgejo.` marker
 
 ## Repo config
 

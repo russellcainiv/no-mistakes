@@ -64,6 +64,10 @@ Each step either passes on its own or stops with a **finding** for you to act on
 Safe, mechanical fixes are applied automatically; anything that touches your intent is escalated for you to **approve**, **fix**, or **skip**.
 Nothing reaches the configured push target until every check is green.
 
+The **review** step can be pointed at a different model, or run as a
+**multi-reviewer panel** — two or more models reviewing the same diff with their
+findings unioned. See [Review Model Wiring & the Multi-Reviewer Panel](https://kunchenguid.github.io/no-mistakes/guides/review-panel/).
+
 ## Install
 
 ```sh

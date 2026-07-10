@@ -67,6 +67,50 @@ Override the Bitbucket Cloud API base URL.
 
 Useful for mocking in tests or pointing at a proxy.
 
+## `NO_MISTAKES_GITEA_API_TOKEN`
+
+Gitea/Forgejo API token used for PR creation, CI monitoring, and posting the `no-mistakes/gate` commit status.
+
+|         |                                                          |
+| ------- | -------------------------------------------------------- |
+| Type    | `string`                                                  |
+| Default | (none; falls back to the token recorded by `tea` for the matching host) |
+
+See [Provider Integration](/no-mistakes/guides/provider-integration/#gitea-and-forgejo).
+
+## `NO_MISTAKES_GITEA_API_BASE_URL`
+
+Override the Gitea/Forgejo API base URL (`scheme://host[:port]`).
+
+|         |                                                             |
+| ------- | ----------------------------------------------------------- |
+| Type    | `string`                                                     |
+| Default | (none; derived from the repository remote URL)              |
+
+Required for SSH remotes, whose scheme and port cannot be inferred from the remote alone.
+
+## `NO_MISTAKES_GITEA_HOSTS`
+
+Comma-separated list of hostnames to treat as Gitea/Forgejo when the hostname carries no `gitea.`/`forgejo.`/`codeberg.org` marker.
+
+|         |                                                    |
+| ------- | -------------------------------------------------- |
+| Type    | `string` (comma-separated hostnames)               |
+| Default | (none)                                              |
+
+Entries are compared with their port stripped, so `localhost` matches `localhost:3000`. See [Provider Integration](/no-mistakes/guides/provider-integration/#gitea-and-forgejo).
+
+## `TEA_CONFIG_HOME`
+
+Directory holding the `tea` CLI's `config.yml`, consulted for Gitea/Forgejo host detection and token resolution.
+
+|         |          |
+| ------- | -------- |
+| Type    | `string` |
+| Default | (none)   |
+
+Takes precedence over `XDG_CONFIG_HOME`. When unset, no-mistakes checks `$XDG_CONFIG_HOME/tea/config.yml`, then the macOS Application Support location (`~/Library/Application Support/tea/config.yml`), then `~/.config/tea/config.yml`.
+
 ## `NO_MISTAKES_NO_UPDATE_CHECK`
 
 Disable background update checks.
@@ -114,7 +158,7 @@ When the upstream hostname is not `github.com`, no-mistakes reads gh's configure
 
 ## `XDG_CONFIG_HOME`
 
-Config directory used to locate glab's `config.yml` for self-hosted GitLab detection and gh's `hosts.yml` for self-hosted GitHub Enterprise detection.
+Config directory used to locate glab's `config.yml` for self-hosted GitLab detection, gh's `hosts.yml` for self-hosted GitHub Enterprise detection, and tea's `config.yml` for Gitea/Forgejo detection and token resolution.
 
 |         |             |
 | ------- | ----------- |
@@ -123,6 +167,7 @@ Config directory used to locate glab's `config.yml` for self-hosted GitLab detec
 
 When `GLAB_CONFIG_DIR` is unset, no-mistakes looks for glab's configured hosts at `$XDG_CONFIG_HOME/glab-cli/config.yml`, falling back to `~/.config/glab-cli/config.yml` when `XDG_CONFIG_HOME` is unset.
 When `GH_CONFIG_DIR` is unset, no-mistakes looks for gh's configured hosts at `$XDG_CONFIG_HOME/gh/hosts.yml`, falling back to `~/.config/gh/hosts.yml` when `XDG_CONFIG_HOME` is unset.
+When `TEA_CONFIG_HOME` is unset, no-mistakes looks for tea's config at `$XDG_CONFIG_HOME/tea/config.yml`, then the macOS Application Support location, then `~/.config/tea/config.yml`.
 
 ## `NO_MISTAKES_UMAMI_HOST`
 

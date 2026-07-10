@@ -354,25 +354,27 @@ func TestExecutor_ConfiguredSkippedStepDoesNotExecuteAndContinues(t *testing.T) 
 	database, p, run, repo := setupTest(t)
 	workDir := t.TempDir()
 
+	// Skip both: the skippable test step must be skipped, while the mandatory
+	// review step must run anyway (SetSkippedSteps drops mandatory steps).
 	review := newPassStep(types.StepReview)
 	testStep := newPassStep(types.StepTest)
 	exec := NewExecutor(database, p, nil, nil, []Step{review, testStep}, nil)
-	exec.SetSkippedSteps([]types.StepName{types.StepReview})
+	exec.SetSkippedSteps([]types.StepName{types.StepReview, types.StepTest})
 	events := collectEvents(exec)
 
 	if err := exec.Execute(context.Background(), run, repo, workDir); err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if got := review.callCount(); got != 0 {
+	if got := testStep.callCount(); got != 0 {
 		t.Fatalf("skipped step executed %d times, want 0", got)
 	}
-	if got := testStep.callCount(); got != 1 {
-		t.Fatalf("next step executed %d times, want 1", got)
+	if got := review.callCount(); got != 1 {
+		t.Fatalf("mandatory review executed %d times, want 1 despite skip request", got)
 	}
-	if event := events.find(ipc.EventStepStarted, types.StepReview); event != nil {
+	if event := events.find(ipc.EventStepStarted, types.StepTest); event != nil {
 		t.Fatal("configured skipped step should not emit step_started")
 	}
-	event := events.find(ipc.EventStepCompleted, types.StepReview)
+	event := events.find(ipc.EventStepCompleted, types.StepTest)
 	if event == nil || event.Status == nil || *event.Status != string(types.StepStatusSkipped) {
 		t.Fatalf("expected skipped completion event, got %+v", event)
 	}
@@ -382,8 +384,11 @@ func TestExecutor_ConfiguredSkippedStepDoesNotExecuteAndContinues(t *testing.T) 
 		t.Fatal(err)
 	}
 	for _, step := range steps {
-		if step.StepName == types.StepReview && step.Status != types.StepStatusSkipped {
-			t.Fatalf("review status = %s, want %s", step.Status, types.StepStatusSkipped)
+		if step.StepName == types.StepTest && step.Status != types.StepStatusSkipped {
+			t.Fatalf("test status = %s, want %s", step.Status, types.StepStatusSkipped)
+		}
+		if step.StepName == types.StepReview && step.Status == types.StepStatusSkipped {
+			t.Fatal("mandatory review must not be recorded as skipped")
 		}
 	}
 }

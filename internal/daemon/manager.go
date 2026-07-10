@@ -432,6 +432,50 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 		ag = agent.NewFallback(created)
 	}
 
+	// Build the review panel, if configured. Each reviewer is an independent
+	// agent (its model wired via agent_args_override) that reviews the diff on
+	// its own; the review step unions their findings. Individual reviewers are
+	// best-effort: one that cannot be constructed (e.g. missing binary) is
+	// skipped with a warning. A panel where EVERY reviewer failed is an error —
+	// silently degrading to a single-agent review would void the configured
+	// multi-reviewer guarantee (docs/review-panel.md).
+	var reviewAgents []pipeline.ReviewAgent
+	if !steps.IsDemoMode() && len(cfg.Reviewers) > 0 {
+		for _, reviewer := range cfg.Reviewers {
+			binPath := reviewer.Path
+			if binPath == "" {
+				binPath = cfg.AgentPathFor(reviewer.Agent)
+			}
+			args := reviewer.Args
+			if len(args) == 0 {
+				args = cfg.AgentArgsFor(reviewer.Agent)
+			}
+			rev, revErr := agent.NewWithOptions(reviewer.Agent, binPath, args, agent.Options{
+				ACPRegistryOverrides: cfg.ACPRegistryOverrides,
+			})
+			if revErr != nil {
+				slog.Warn("skipping review agent", "run_id", run.ID, "agent", reviewer.Agent, "path", binPath, "error", revErr)
+				continue
+			}
+			label := reviewer.Label
+			if label == "" {
+				if reviewer.Path != "" {
+					label = filepath.Base(reviewer.Path)
+				} else {
+					label = string(reviewer.Agent)
+				}
+			}
+			reviewAgents = append(reviewAgents, pipeline.ReviewAgent{Agent: agent.WithSteering(rev), Label: label})
+		}
+		if len(reviewAgents) == 0 {
+			ag.Close()
+			errMsg := fmt.Sprintf("review panel: none of the %d configured reviewers could be constructed (check reviewer paths in config)", len(cfg.Reviewers))
+			m.db.UpdateRunError(run.ID, errMsg)
+			trackStartFailure("create_review_panel")
+			return "", fmt.Errorf("%s", errMsg)
+		}
+	}
+
 	execSteps := m.steps()
 	telemetry.Track("run", telemetry.Fields{
 		"action":      "started",
@@ -445,6 +489,7 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 	// Create executor with event broadcast.
 	runCtx, cancel := context.WithCancelCause(context.Background())
 	executor := pipeline.NewExecutor(m.db, m.paths, cfg, ag, execSteps, m.broadcast)
+	executor.SetReviewAgents(reviewAgents)
 	executor.SetSkippedSteps(skipSteps)
 
 	// Track executor.
@@ -487,9 +532,16 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 				if dbErr := m.db.UpdateRunErrorStatus(run.ID, errMsg, types.RunFailed); dbErr != nil {
 					slog.Error("failed to update run after panic", "run_id", run.ID, "error", dbErr)
 				}
+				// A panicking run is as terminal as a failed one — without this
+				// stamp a panic after commits were pushed leaves the head SHA
+				// statusless and branch protection deadlocks again.
+				postGateStatus(run, repo, wtDir, false)
 			}
 			cancel(nil)
 			ag.Close()
+			for _, rev := range reviewAgents {
+				rev.Agent.Close()
+			}
 			// Close subscriber channels for this run.
 			m.closeSubscribers(run.ID)
 			// Clean up worktree.
@@ -520,6 +572,13 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			}
 			telemetry.Track("run", fields)
 			slog.Error("pipeline failed", "run_id", run.ID, "error", err)
+			// Only an actual failure downgrades the gate. A cancelled run
+			// (abort, supersede, daemon shutdown) proved nothing either way —
+			// stamping failure would block a head whose checks-passed success
+			// stamp is still the latest truthful signal.
+			if run.Status == types.RunFailed {
+				postGateStatus(run, repo, wtDir, false)
+			}
 		} else {
 			telemetry.Track("run", telemetry.Fields{
 				"action":      "finished",
@@ -532,10 +591,47 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 				"pr_created":  run.PRURL != nil && *run.PRURL != "",
 			})
 			slog.Info("pipeline completed", "run_id", run.ID)
+			postGateStatus(run, repo, wtDir, true)
 		}
 	}()
 
 	return run.ID, nil
+}
+
+// postGateStatus stamps the run's terminal outcome as a commit status on the
+// repo's Gitea/Forgejo instance (the registered upstream, or a "forgejo"
+// mirror remote — see steps.PostGateStatus). A Forgejo branch-protection
+// "required status check" (no-mistakes/gate) keys on this, so a branch cannot
+// merge into a protected branch unless the gate actually ran — which closes
+// the `git push --no-verify` bypass, because the status is enforced
+// server-side after the push lands. The CI step stamps success earlier, at
+// the checks-passed decision point; this terminal post is the overwrite that
+// downgrades it when a later fix round fails.
+//
+// Best effort: an absent Forgejo target, a missing token, or an API error are
+// logged and ignored. Posting the gate status must never fail or block a run.
+func postGateStatus(run *db.Run, repo *db.Repo, wtDir string, success bool) {
+	// context.Background() on purpose: this post runs after the run context is
+	// already cancelled (terminal outcome / panic), and it must still land.
+	ctx, cancel := context.WithTimeout(context.Background(), steps.GateStatusPostTimeout)
+	defer cancel()
+
+	targetURL := ""
+	if run.PRURL != nil {
+		targetURL = *run.PRURL
+	}
+	posted, err := steps.PostGateStatus(ctx, repo.UpstreamURL, wtDir, run.HeadSHA, targetURL, success)
+	if err != nil {
+		slog.Warn("gate status post failed", "run_id", run.ID, "sha", run.HeadSHA, "err", err)
+		return
+	}
+	if posted {
+		state := "success"
+		if !success {
+			state = "failure"
+		}
+		slog.Info("gate status posted", "run_id", run.ID, "sha", run.HeadSHA, "state", state)
+	}
 }
 
 func telemetryBranchRole(branch, defaultBranch string) string {

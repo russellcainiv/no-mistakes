@@ -59,6 +59,22 @@ type GlobalConfig struct {
 	AutoFix              AutoFixRaw
 	Intent               IntentRaw
 	Test                 TestRaw
+	// Reviewers, when non-empty, turns the review step into a multi-reviewer
+	// panel: each entry reviews the diff independently and their findings are
+	// unioned. Empty means the single pipeline agent reviews (default).
+	Reviewers []Reviewer `yaml:"-"`
+}
+
+// Reviewer is a resolved review-panel entry. Agent is the agent type whose CLI
+// protocol to speak; Path optionally overrides the binary (e.g. a claude-mm
+// wrapper that points the claude CLI at a different model); Args optionally
+// overrides the CLI flags for this reviewer only; Label is the display name
+// used in logs and finding attribution.
+type Reviewer struct {
+	Agent types.AgentName
+	Path  string
+	Args  []string
+	Label string
 }
 
 // globalConfigRaw is the on-disk YAML representation with duration as string.
@@ -76,6 +92,24 @@ type globalConfigRaw struct {
 	AutoFix              AutoFixRaw          `yaml:"auto_fix"`
 	Intent               IntentRaw           `yaml:"intent"`
 	Test                 TestRaw             `yaml:"test"`
+	Review               ReviewRaw           `yaml:"review"`
+}
+
+// ReviewRaw is the YAML representation of review-step settings.
+type ReviewRaw struct {
+	// Reviewers is the review panel: two or more entries make the review step a
+	// multi-reviewer panel whose findings are unioned.
+	Reviewers []ReviewerRaw `yaml:"reviewers"`
+}
+
+// ReviewerRaw is one review-panel entry as written in YAML. Agent is required;
+// Path, Args, and Label are optional per-reviewer overrides that let two
+// entries of the same agent type run on different models/binaries.
+type ReviewerRaw struct {
+	Agent types.AgentName `yaml:"agent"`
+	Path  string          `yaml:"path"`
+	Args  []string        `yaml:"args"`
+	Label string          `yaml:"label"`
 }
 
 // RepoConfig represents .no-mistakes.yaml in a repo root.
@@ -167,6 +201,9 @@ type Config struct {
 	AutoFix              AutoFix
 	Intent               Intent
 	Test                 Test
+	// Reviewers is the resolved multi-reviewer panel. Empty means the single
+	// pipeline agent reviews the diff.
+	Reviewers []Reviewer
 }
 
 // TestRaw is the YAML representation of test-step settings.
@@ -322,6 +359,29 @@ auto_fix:
   review: 0
   document: 3
   ci: 3
+
+# Review panel. By default the single pipeline agent reviews the diff. List two
+# or more reviewers here to run a multi-reviewer panel: each reviews the diff
+# independently (concurrently) and their findings are unioned and de-duplicated,
+# so a problem either reviewer catches surfaces at the gate. Each reviewer names
+# an agent type (claude, codex, rovodev, opencode, pi, copilot, or acp:<target>;
+# "auto" is not allowed) and may override the binary (path), CLI flags (args),
+# and display name (label) so two entries of the SAME agent type can run on
+# different models. A reviewer whose binary is missing is skipped with a warning.
+#
+# Example - Claude plus a MiniMax-backed Claude wrapper (claude-mm):
+# review:
+#   reviewers:
+#     - agent: claude
+#     - agent: claude
+#       path: /Users/you/.local/bin/claude-mm
+#       label: claude-mm
+#
+# Example - two different agents (pi and claude):
+# review:
+#   reviewers:
+#     - agent: pi
+#     - agent: claude
 
 # User-intent extraction. When you push a branch, no-mistakes can read recent
 # transcripts from your local agent (Claude Code, Codex, OpenCode, Rovo Dev, Pi,
@@ -644,6 +704,54 @@ func validateAgentArgsOverride(override map[string][]string) error {
 	return nil
 }
 
+// copyReviewers returns a deep copy of a reviewer slice so callers cannot mutate
+// shared config state through the returned entries' Args slices.
+func copyReviewers(in []Reviewer) []Reviewer {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Reviewer, len(in))
+	for i, r := range in {
+		out[i] = r
+		if len(r.Args) > 0 {
+			out[i].Args = append([]string(nil), r.Args...)
+		}
+	}
+	return out
+}
+
+// validateReviewers ensures each review.reviewers entry names a concrete agent
+// (a known native agent or an acp:<target>), not the "auto" sentinel, and that
+// any per-reviewer args respect the same reserved-flag rules as
+// agent_args_override. "auto" is rejected because a reviewer panel needs
+// deterministic, explicitly chosen agents rather than first-available
+// resolution.
+func validateReviewers(reviewers []Reviewer) error {
+	for i, r := range reviewers {
+		s := strings.TrimSpace(string(r.Agent))
+		if s == "" {
+			return fmt.Errorf("invalid review.reviewers[%d]: missing agent", i)
+		}
+		if r.Agent == types.AgentAuto {
+			return fmt.Errorf("invalid review.reviewers[%d]: %q is not allowed; name a concrete agent", i, s)
+		}
+		isACP := strings.HasPrefix(s, "acp:")
+		if isACP {
+			if strings.TrimSpace(strings.TrimPrefix(s, "acp:")) == "" {
+				return fmt.Errorf("invalid review.reviewers[%d]: %q has an empty acp target", i, s)
+			}
+		} else if !agentArgsOverrideAgents[s] {
+			return fmt.Errorf("invalid review.reviewers[%d]: unknown agent %q (valid: claude, codex, rovodev, opencode, pi, copilot, acp:<target>)", i, s)
+		}
+		if len(r.Args) > 0 && !isACP {
+			if err := validateAgentArgsOverride(map[string][]string{s: r.Args}); err != nil {
+				return fmt.Errorf("invalid review.reviewers[%d]: %w", i, err)
+			}
+		}
+	}
+	return nil
+}
+
 // EnsureDefaultGlobalConfig writes the default config file at path if it does
 // not already exist. Failures are logged at debug level and silently ignored.
 func EnsureDefaultGlobalConfig(path string) {
@@ -711,6 +819,16 @@ func LoadGlobal(path string) (*GlobalConfig, error) {
 			return nil, err
 		}
 		cfg.AgentArgsOverride = raw.AgentArgsOverride
+	}
+	if len(raw.Review.Reviewers) > 0 {
+		reviewers := make([]Reviewer, 0, len(raw.Review.Reviewers))
+		for _, r := range raw.Review.Reviewers {
+			reviewers = append(reviewers, Reviewer{Agent: r.Agent, Path: r.Path, Args: r.Args, Label: r.Label})
+		}
+		if err := validateReviewers(reviewers); err != nil {
+			return nil, err
+		}
+		cfg.Reviewers = reviewers
 	}
 	timeoutValue := raw.CITimeout
 	if timeoutValue == "" {
@@ -1015,6 +1133,7 @@ func Merge(global *GlobalConfig, repo *RepoConfig) *Config {
 		AutoFix:              af,
 		Intent:               intent,
 		Test:                 test,
+		Reviewers:            copyReviewers(global.Reviewers),
 	}
 
 	if repo.Agent != "" {

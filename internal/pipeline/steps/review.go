@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/git"
@@ -179,23 +180,13 @@ Risk assessment (after listing all findings):
 		historySection,
 	)
 
-	result, err := sctx.Agent.Run(ctx, agent.RunOpts{
-		Prompt:     prompt,
-		CWD:        sctx.WorkDir,
-		JSONSchema: reviewFindingsSchema,
-		OnChunk:    sctx.LogChunk,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("agent review: %w", err)
+	reviewers := sctx.ReviewAgents
+	if len(reviewers) == 0 {
+		reviewers = []pipeline.ReviewAgent{{Agent: sctx.Agent, Label: sctx.Agent.Name()}}
 	}
-
-	// Parse structured findings
-	var findings Findings
-	if result.Output != nil {
-		if err := json.Unmarshal(result.Output, &findings); err != nil {
-			sctx.Log("could not parse structured output, using text response")
-			findings = Findings{Summary: result.Text}
-		}
+	findings, err := runReviewPanel(sctx, reviewers, prompt)
+	if err != nil {
+		return nil, err
 	}
 
 	needsApproval := hasBlockingFindings(findings.Items)
@@ -207,6 +198,157 @@ Risk assessment (after listing all findings):
 		Findings:      string(findingsJSON),
 		FixSummary:    fixSummary,
 	}, nil
+}
+
+// runReviewPanel runs the review prompt against every reviewer agent and unions
+// the results. A single reviewer streams its output and returns its findings
+// unchanged. Multiple reviewers run concurrently — their streaming chunks are
+// suppressed to avoid interleaving, and their findings are merged and
+// de-duplicated into one panel result. The panel fails only when every reviewer
+// fails; a partial failure degrades to the reviewers that succeeded.
+func runReviewPanel(sctx *pipeline.StepContext, reviewers []pipeline.ReviewAgent, prompt string) (Findings, error) {
+	if len(reviewers) == 1 {
+		return runReviewAgent(sctx, reviewers[0].Agent, prompt, true)
+	}
+
+	type result struct {
+		findings Findings
+		err      error
+	}
+	results := make([]result, len(reviewers))
+	var wg sync.WaitGroup
+	for i := range reviewers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sctx.Log(fmt.Sprintf("reviewer %s: reviewing...", reviewers[i].Label))
+			f, err := runReviewAgent(sctx, reviewers[i].Agent, prompt, false)
+			if err == nil {
+				tagFindingsSource(&f, reviewers[i].Label)
+			}
+			results[i] = result{findings: f, err: err}
+		}(i)
+	}
+	wg.Wait()
+
+	var merged Findings
+	var firstErr error
+	ok := 0
+	for i, r := range results {
+		if r.err != nil {
+			sctx.Log(fmt.Sprintf("reviewer %s failed: %v", reviewers[i].Label, r.err))
+			if firstErr == nil {
+				firstErr = r.err
+			}
+			continue
+		}
+		sctx.Log(fmt.Sprintf("reviewer %s: %d finding(s)", reviewers[i].Label, len(r.findings.Items)))
+		mergeReviewFindings(&merged, r.findings)
+		ok++
+	}
+	if ok == 0 {
+		return Findings{}, fmt.Errorf("agent review: all %d reviewers failed: %w", len(reviewers), firstErr)
+	}
+	return merged, nil
+}
+
+// runReviewAgent runs one reviewer and parses its structured findings. When
+// stream is true the agent's chunks are forwarded to the live log; the panel
+// path passes false so concurrent reviewers do not interleave their streams.
+func runReviewAgent(sctx *pipeline.StepContext, ag agent.Agent, prompt string, stream bool) (Findings, error) {
+	opts := agent.RunOpts{
+		Prompt:     prompt,
+		CWD:        sctx.WorkDir,
+		JSONSchema: reviewFindingsSchema,
+	}
+	if stream {
+		opts.OnChunk = sctx.LogChunk
+	}
+	result, err := ag.Run(sctx.Ctx, opts)
+	if err != nil {
+		return Findings{}, fmt.Errorf("agent review: %w", err)
+	}
+	var findings Findings
+	if result.Output != nil {
+		if err := json.Unmarshal(result.Output, &findings); err != nil {
+			sctx.Log("could not parse structured output, using text response")
+			findings = Findings{Summary: result.Text}
+		}
+	}
+	return findings, nil
+}
+
+// tagFindingsSource records which reviewer produced each finding, unless the
+// agent already attributed it. This lets the TUI show provenance in a panel.
+func tagFindingsSource(f *Findings, source string) {
+	for i := range f.Items {
+		if strings.TrimSpace(f.Items[i].Source) == "" {
+			f.Items[i].Source = source
+		}
+	}
+}
+
+// mergeReviewFindings unions src into dst, dropping findings that duplicate one
+// already present (same file, line, and description). A duplicate still
+// upgrades the kept finding's severity when a later reviewer graded it higher,
+// so agreement across reviewers never downgrades. The panel's summary is the
+// first non-empty summary seen and its risk level is the highest any reviewer
+// assigned, so a single high-risk reviewer escalates the whole panel.
+func mergeReviewFindings(dst *Findings, src Findings) {
+	for _, item := range src.Items {
+		if existing := findReviewFinding(dst.Items, item); existing != nil {
+			if severityRank(item.Severity) > severityRank(existing.Severity) {
+				existing.Severity = item.Severity
+			}
+			continue
+		}
+		dst.Items = append(dst.Items, item)
+	}
+	if strings.TrimSpace(dst.Summary) == "" {
+		dst.Summary = src.Summary
+	}
+	if riskRank(src.RiskLevel) > riskRank(dst.RiskLevel) {
+		dst.RiskLevel = src.RiskLevel
+		dst.RiskRationale = src.RiskRationale
+	}
+}
+
+func findReviewFinding(items []Finding, candidate Finding) *Finding {
+	for i := range items {
+		if items[i].File == candidate.File && items[i].Line == candidate.Line &&
+			strings.EqualFold(strings.TrimSpace(items[i].Description), strings.TrimSpace(candidate.Description)) {
+			return &items[i]
+		}
+	}
+	return nil
+}
+
+// severityRank orders finding severities so duplicate findings keep the most
+// severe grade any reviewer assigned. Unknown severities rank lowest.
+func severityRank(severity string) int {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "error", "blocking", "critical":
+		return 3
+	case "warning":
+		return 2
+	case "info":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func riskRank(level string) int {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func sanitizedPreviousFindingsForPrompt(raw string) string {

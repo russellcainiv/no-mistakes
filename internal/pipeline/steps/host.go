@@ -9,6 +9,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 	"github.com/kunchenguid/no-mistakes/internal/scm/azuredevops"
+	"github.com/kunchenguid/no-mistakes/internal/scm/gitea"
 	"github.com/kunchenguid/no-mistakes/internal/scm/github"
 	"github.com/kunchenguid/no-mistakes/internal/scm/gitlab"
 )
@@ -90,6 +91,25 @@ func buildHost(sctx *pipeline.StepContext, provider scm.Provider) (scm.Host, str
 			return nil, "could not resolve Azure DevOps organization, project, and repository from the remote URL"
 		}
 		return azuredevops.New(cmdFactory, func() bool { return stepCLIAvailable(sctx, provider) }, org, project, repo), ""
+	case scm.ProviderGitea:
+		repo, err := gitea.ParseRepoRef(sctx.Repo.UpstreamURL)
+		if err != nil && sctx.Run.PRURL != nil {
+			repo, err = gitea.ParseRepoRef(*sctx.Run.PRURL)
+		}
+		if err != nil {
+			return nil, err.Error()
+		}
+		client, err := gitea.NewClientFromEnv(sctx.Env, repo)
+		if err != nil {
+			return nil, err.Error()
+		}
+		forkOwner := ""
+		if sctx.Repo.ForkURL != "" {
+			if forkRef, ferr := gitea.ParseRepoRef(sctx.Repo.ForkURL); ferr == nil {
+				forkOwner = forkRef.Owner
+			}
+		}
+		return gitea.NewHost(client, repo, forkOwner), ""
 	default:
 		return nil, fmt.Sprintf("provider %s is not supported yet", provider)
 	}

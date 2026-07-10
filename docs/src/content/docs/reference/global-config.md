@@ -194,9 +194,36 @@ agent_args_override:
 
 For Codex, `service_tier` and `model_reasoning_effort` tune different things: `service_tier` selects the speed or priority lane, while `model_reasoning_effort` selects reasoning depth. no-mistakes reloads global config while setting up each run, so edits made before `no-mistakes axi run` apply to that run. For repeatable profiles, use separately initialized `NM_HOME` directories; each has its own `config.yaml` and no-mistakes state.
 
+### review.reviewers
+
+Turn the review step into a multi-reviewer panel: two or more entries review each diff independently and concurrently, and their findings are unioned and de-duplicated.
+
+|         |          |
+| ------- | -------- |
+| Type    | `object[]` |
+| Default | Empty (single pipeline agent reviews, the default behavior) |
+
+| Field   | Required | Description |
+| ------- | -------- | ----------- |
+| `agent` | yes      | Agent type whose CLI protocol to speak (`claude`, `codex`, `opencode`, `pi`, `copilot`, `acp:<target>`); `auto` is not allowed |
+| `path`  | no       | Override the binary for this reviewer only |
+| `args`  | no       | Override CLI flags for this reviewer only (same reserved-flag rules as `agent_args_override`) |
+| `label` | no       | Display name in logs and finding attribution; defaults to the binary basename or agent name |
+
+```yaml
+review:
+  reviewers:
+    - agent: claude
+    - agent: claude
+      path: /Users/you/.local/bin/claude-mm
+      label: claude-mm
+```
+
+See [Review Model Wiring & the Multi-Reviewer Panel](/no-mistakes/guides/review-panel/) for the full semantics (union/de-dup, risk escalation, best-effort reviewer construction, streaming) and more examples.
+
 ### ci_timeout
 
-How long the CI step monitors an open PR, including provider CI status and on GitHub, GitLab, or Azure DevOps PR mergeability, before giving up.
+How long the CI step monitors an open PR, including provider CI status and on GitHub, GitLab, Azure DevOps, or Gitea/Forgejo PR mergeability, before giving up.
 
 |         |                                                 |
 | ------- | ----------------------------------------------- |
@@ -207,7 +234,7 @@ Accepts any Go `time.ParseDuration` string: `30m`, `2h`, `4h30m`, etc.
 
 This is an idle timeout, not an absolute deadline: every time the base branch advances, the monitor re-arms it.
 So an actively-updated green PR keeps its monitor no matter how long it stays open.
-If it later develops an actual GitHub, GitLab, or Azure DevOps merge conflict, the CI auto-fix path rebases and re-pushes it, while a clean behind PR needs no command.
+If it later develops an actual GitHub, GitLab, Azure DevOps, or Gitea/Forgejo merge conflict, the CI auto-fix path rebases and re-pushes it, while a clean behind PR needs no command.
 A genuinely idle/abandoned PR is still reaped after the timeout elapses.
 
 Set it to `unlimited` (`none`, `off`, and `never` are accepted aliases), `0`, or any non-positive duration to monitor until the PR is merged, closed, or the run is aborted with `no-mistakes axi abort --run <id>`.
@@ -269,7 +296,7 @@ For empty `commands.lint`, the agent still attempts safe fixes during the initia
 | `auto_fix.test`     | `int` | `3`     | Test failure auto-fix attempts                                                              |
 | `auto_fix.document` | `int` | `3`     | Not used by the automatic document pass                                                     |
 | `auto_fix.lint`     | `int` | `3`     | Lint issue auto-fix attempts                                                                |
-| `auto_fix.ci`       | `int` | `3`     | CI auto-fix attempts for CI failures, plus GitHub, GitLab, and Azure DevOps merge conflicts |
+| `auto_fix.ci`       | `int` | `3`     | CI auto-fix attempts for CI failures, plus GitHub, GitLab, Azure DevOps, and Gitea/Forgejo merge conflicts |
 
 Legacy alias: `auto_fix.babysit`.
 

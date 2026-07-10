@@ -93,13 +93,16 @@ func TestPushReceivedSkipStepsConfiguresExecutor(t *testing.T) {
 	}
 	defer client.Close()
 
+	// Request skipping both over raw IPC: the skippable test step is skipped,
+	// while the mandatory review step must execute anyway — the server-side
+	// backstop, since IPC callers bypass the CLI's client-side validation.
 	var result ipc.PushReceivedResult
 	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
 		Gate:      p.RepoDir("skip-run-repo"),
 		Ref:       "refs/heads/main",
 		Old:       "0000000000000000000000000000000000000000",
 		New:       headSHA,
-		SkipSteps: []types.StepName{types.StepReview},
+		SkipSteps: []types.StepName{types.StepReview, types.StepTest},
 	}, &result)
 	if err != nil {
 		t.Fatal(err)
@@ -109,19 +112,19 @@ func TestPushReceivedSkipStepsConfiguresExecutor(t *testing.T) {
 	if run.Status != types.RunCompleted {
 		t.Fatalf("run status = %q, want %q", run.Status, types.RunCompleted)
 	}
-	if got := review.execCnt.Load(); got != 0 {
-		t.Fatalf("review executed %d times, want 0", got)
+	if got := review.execCnt.Load(); got != 1 {
+		t.Fatalf("mandatory review executed %d times, want 1 despite IPC skip request", got)
 	}
-	if got := testStep.execCnt.Load(); got != 1 {
-		t.Fatalf("test executed %d times, want 1", got)
+	if got := testStep.execCnt.Load(); got != 0 {
+		t.Fatalf("test executed %d times, want 0", got)
 	}
 	steps, err := d.GetStepsByRun(result.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, step := range steps {
-		if step.StepName == types.StepReview && step.Status != types.StepStatusSkipped {
-			t.Fatalf("review status = %s, want %s", step.Status, types.StepStatusSkipped)
+		if step.StepName == types.StepTest && step.Status != types.StepStatusSkipped {
+			t.Fatalf("test status = %s, want %s", step.Status, types.StepStatusSkipped)
 		}
 	}
 }
@@ -330,30 +333,35 @@ func TestRerunSkipStepsConfiguresExecutor(t *testing.T) {
 	}
 	waitForRunTerminalState(t, d, first.RunID)
 
+	// Skip both on rerun: the skippable test step is skipped, the mandatory
+	// review step runs anyway (server-side backstop for raw IPC callers).
 	var second ipc.RerunResult
 	err = client.Call(ipc.MethodRerun, &ipc.RerunParams{
 		RepoID:    "skip-rerun-repo",
 		Branch:    "main",
-		SkipSteps: []types.StepName{types.StepReview},
+		SkipSteps: []types.StepName{types.StepReview, types.StepTest},
 	}, &second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitForRunTerminalState(t, d, second.RunID)
 
-	if got := review.execCnt.Load(); got != 1 {
-		t.Fatalf("review executed %d times, want 1", got)
+	if got := review.execCnt.Load(); got != 2 {
+		t.Fatalf("review executed %d times, want 2 (initial + rerun, skip request ignored)", got)
 	}
-	if got := testStep.execCnt.Load(); got != 2 {
-		t.Fatalf("test executed %d times, want 2", got)
+	if got := testStep.execCnt.Load(); got != 1 {
+		t.Fatalf("test executed %d times, want 1 (skipped on rerun)", got)
 	}
 	steps, err := d.GetStepsByRun(second.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, step := range steps {
-		if step.StepName == types.StepReview && step.Status != types.StepStatusSkipped {
-			t.Fatalf("review status = %s, want %s", step.Status, types.StepStatusSkipped)
+		if step.StepName == types.StepTest && step.Status != types.StepStatusSkipped {
+			t.Fatalf("test status = %s, want %s", step.Status, types.StepStatusSkipped)
+		}
+		if step.StepName == types.StepReview && step.Status == types.StepStatusSkipped {
+			t.Fatal("mandatory review must not be recorded as skipped on rerun")
 		}
 	}
 }
