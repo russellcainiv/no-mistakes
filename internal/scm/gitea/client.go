@@ -104,11 +104,12 @@ func NewClientFromEnv(env []string, repo RepoRef) (*Client, error) {
 	}, nil
 }
 
-// FindOpenPRByHead returns the open PR whose head ref matches branch (and, when
-// base is non-empty, whose base ref matches base), or nil when none exists.
-// Gitea's list-pulls endpoint has no head filter, so results are filtered
-// client-side.
-func (c *Client) FindOpenPRByHead(ctx context.Context, repo RepoRef, branch, base string) (*PullRequest, error) {
+// FindOpenPRByHead returns the open PR whose head ref matches branch (and,
+// when base/headOwner are non-empty, whose base ref and head repo owner match
+// too — headOwner disambiguates fork PRs that share a branch name with the
+// parent), or nil when none exists. Gitea's list-pulls endpoint has no head
+// filter, so results are filtered client-side.
+func (c *Client) FindOpenPRByHead(ctx context.Context, repo RepoRef, branch, base, headOwner string) (*PullRequest, error) {
 	var pulls []PullRequest
 	path := fmt.Sprintf("%s?state=open&limit=50", repoPullsPath(repo))
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, &pulls); err != nil {
@@ -119,6 +120,10 @@ func (c *Client) FindOpenPRByHead(ctx context.Context, repo RepoRef, branch, bas
 			continue
 		}
 		if strings.TrimSpace(base) != "" && pulls[i].Base.Ref != base {
+			continue
+		}
+		if strings.TrimSpace(headOwner) != "" &&
+			!strings.EqualFold(strings.TrimSpace(pulls[i].Head.Repo.Owner.Login), strings.TrimSpace(headOwner)) {
 			continue
 		}
 		return &pulls[i], nil

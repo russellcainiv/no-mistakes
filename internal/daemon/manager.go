@@ -434,10 +434,11 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 
 	// Build the review panel, if configured. Each reviewer is an independent
 	// agent (its model wired via agent_args_override) that reviews the diff on
-	// its own; the review step unions their findings. Reviewers are best-effort:
-	// one that cannot be constructed (e.g. missing binary) is skipped with a
-	// warning rather than failing the run, and an empty panel falls back to the
-	// single pipeline agent.
+	// its own; the review step unions their findings. Individual reviewers are
+	// best-effort: one that cannot be constructed (e.g. missing binary) is
+	// skipped with a warning. A panel where EVERY reviewer failed is an error —
+	// silently degrading to a single-agent review would void the configured
+	// multi-reviewer guarantee (docs/review-panel.md).
 	var reviewAgents []pipeline.ReviewAgent
 	if !steps.IsDemoMode() && len(cfg.Reviewers) > 0 {
 		for _, reviewer := range cfg.Reviewers {
@@ -465,6 +466,13 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 				}
 			}
 			reviewAgents = append(reviewAgents, pipeline.ReviewAgent{Agent: agent.WithSteering(rev), Label: label})
+		}
+		if len(reviewAgents) == 0 {
+			ag.Close()
+			errMsg := fmt.Sprintf("review panel: none of the %d configured reviewers could be constructed (check reviewer paths in config)", len(cfg.Reviewers))
+			m.db.UpdateRunError(run.ID, errMsg)
+			trackStartFailure("create_review_panel")
+			return "", fmt.Errorf("%s", errMsg)
 		}
 	}
 
@@ -564,7 +572,13 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			}
 			telemetry.Track("run", fields)
 			slog.Error("pipeline failed", "run_id", run.ID, "error", err)
-			postGateStatus(run, repo, wtDir, false)
+			// Only an actual failure downgrades the gate. A cancelled run
+			// (abort, supersede, daemon shutdown) proved nothing either way —
+			// stamping failure would block a head whose checks-passed success
+			// stamp is still the latest truthful signal.
+			if run.Status == types.RunFailed {
+				postGateStatus(run, repo, wtDir, false)
+			}
 		} else {
 			telemetry.Track("run", telemetry.Fields{
 				"action":      "finished",

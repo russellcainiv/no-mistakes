@@ -92,6 +92,35 @@ func TestToChecksExcludesOwnGateStatus(t *testing.T) {
 	}
 }
 
+func TestFindOpenPRByHeadFiltersForkOwner(t *testing.T) {
+	// Two open PRs share a head branch name: one from the parent repo, one
+	// from a fork. The fork owner must select the fork's PR, and no owner
+	// filter must keep same-repo matching on branch alone.
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		pulls := make([]PullRequest, 2)
+		pulls[0].Number = 1
+		pulls[0].Head.Ref = "feat/x"
+		pulls[0].Head.Repo.Owner.Login = "russell"
+		pulls[1].Number = 2
+		pulls[1].Head.Ref = "feat/x"
+		pulls[1].Head.Repo.Owner.Login = "forker"
+		_ = json.NewEncoder(w).Encode(pulls)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(handler))
+	defer srv.Close()
+	client := &Client{baseURL: srv.URL, token: "tok", httpClient: srv.Client()}
+	ref := RepoRef{BaseURL: srv.URL, Owner: "russell", Repo: "lvl2"}
+
+	pr, err := client.FindOpenPRByHead(context.Background(), ref, "feat/x", "", "forker")
+	if err != nil || pr == nil || pr.Number != 2 {
+		t.Fatalf("fork owner filter: pr=%+v err=%v, want PR #2", pr, err)
+	}
+	pr, err = client.FindOpenPRByHead(context.Background(), ref, "feat/x", "", "")
+	if err != nil || pr == nil || pr.Number != 1 {
+		t.Fatalf("no owner filter: pr=%+v err=%v, want first match #1", pr, err)
+	}
+}
+
 func TestToChecksMapsUpdatedAtToCompletedAt(t *testing.T) {
 	// Finished statuses carry UpdatedAt as their completion time (the CI
 	// monitor's re-run detection keys on it); pending ones stay zero.

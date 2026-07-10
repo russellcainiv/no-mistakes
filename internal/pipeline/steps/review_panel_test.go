@@ -12,15 +12,36 @@ func TestRiskRank(t *testing.T) {
 	}
 }
 
-func TestReviewFindingSeen(t *testing.T) {
+func TestFindReviewFinding(t *testing.T) {
 	items := []Finding{{File: "a.go", Line: 10, Description: "off-by-one"}}
 	// Same file+line+description (case/space-insensitive) is a duplicate.
-	if !reviewFindingSeen(items, Finding{File: "a.go", Line: 10, Description: "  OFF-BY-ONE "}) {
+	if findReviewFinding(items, Finding{File: "a.go", Line: 10, Description: "  OFF-BY-ONE "}) == nil {
 		t.Error("expected duplicate to be detected")
 	}
 	// Different line is not a duplicate.
-	if reviewFindingSeen(items, Finding{File: "a.go", Line: 11, Description: "off-by-one"}) {
+	if findReviewFinding(items, Finding{File: "a.go", Line: 11, Description: "off-by-one"}) != nil {
 		t.Error("different line should not be a duplicate")
+	}
+}
+
+func TestMergeReviewFindingsUpgradesDuplicateSeverity(t *testing.T) {
+	var merged Findings
+	mergeReviewFindings(&merged, Findings{Items: []Finding{
+		{File: "a.go", Line: 10, Description: "off-by-one", Severity: "info"},
+	}})
+	mergeReviewFindings(&merged, Findings{Items: []Finding{
+		{File: "a.go", Line: 10, Description: "off-by-one", Severity: "error"},
+	}})
+	// A later reviewer grading the same finding higher upgrades it...
+	if len(merged.Items) != 1 || merged.Items[0].Severity != "error" {
+		t.Fatalf("want single finding upgraded to error, got %+v", merged.Items)
+	}
+	// ...and a later lower grade never downgrades.
+	mergeReviewFindings(&merged, Findings{Items: []Finding{
+		{File: "a.go", Line: 10, Description: "off-by-one", Severity: "warning"},
+	}})
+	if merged.Items[0].Severity != "error" {
+		t.Fatalf("severity downgraded to %q", merged.Items[0].Severity)
 	}
 }
 

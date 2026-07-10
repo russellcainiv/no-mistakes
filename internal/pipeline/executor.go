@@ -58,6 +58,9 @@ func (e *Executor) SetReviewAgents(agents []ReviewAgent) {
 }
 
 // SetSkippedSteps configures steps that should be marked skipped without running.
+// Mandatory steps are dropped here as the server-side backstop: the CLI already
+// rejects them, but IPC params (push options, rerun) reach this point verbatim
+// and must not be able to skip the review gate.
 func (e *Executor) SetSkippedSteps(steps []types.StepName) {
 	if len(steps) == 0 {
 		e.skips = nil
@@ -65,6 +68,9 @@ func (e *Executor) SetSkippedSteps(steps []types.StepName) {
 	}
 	e.skips = make(map[types.StepName]bool, len(steps))
 	for _, step := range steps {
+		if types.IsMandatoryStep(step) {
+			continue
+		}
 		e.skips[step] = true
 	}
 }
@@ -336,8 +342,10 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			// often carries the only detail of why the step failed (e.g. git
 			// stderr from a rejected push); without this the step log shows the
 			// work starting but never why it stopped.
+			logMu.Lock()
 			fmt.Fprintf(logFile, "\nerror: %s\n", err.Error())
 			touchLogActivity("error: "+err.Error(), true)
+			logMu.Unlock()
 			if dbErr := e.db.FailStep(sr.ID, err.Error(), durationMS); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}

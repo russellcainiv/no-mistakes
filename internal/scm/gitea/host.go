@@ -41,7 +41,9 @@ func (h *Host) Available(_ context.Context) error {
 }
 
 func (h *Host) FindPR(ctx context.Context, branch, base string) (*scm.PR, error) {
-	pr, err := h.client.FindOpenPRByHead(ctx, h.repo, branch, base)
+	// Match GitHub's matchesHead semantics: only filter by head owner when a
+	// fork owner is configured; same-repo PRs match on branch alone.
+	pr, err := h.client.FindOpenPRByHead(ctx, h.repo, branch, base, h.forkOwner)
 	if err != nil {
 		return nil, err
 	}

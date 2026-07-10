@@ -289,12 +289,17 @@ func tagFindingsSource(f *Findings, source string) {
 }
 
 // mergeReviewFindings unions src into dst, dropping findings that duplicate one
-// already present (same file, line, and description). The panel's summary is the
+// already present (same file, line, and description). A duplicate still
+// upgrades the kept finding's severity when a later reviewer graded it higher,
+// so agreement across reviewers never downgrades. The panel's summary is the
 // first non-empty summary seen and its risk level is the highest any reviewer
 // assigned, so a single high-risk reviewer escalates the whole panel.
 func mergeReviewFindings(dst *Findings, src Findings) {
 	for _, item := range src.Items {
-		if reviewFindingSeen(dst.Items, item) {
+		if existing := findReviewFinding(dst.Items, item); existing != nil {
+			if severityRank(item.Severity) > severityRank(existing.Severity) {
+				existing.Severity = item.Severity
+			}
 			continue
 		}
 		dst.Items = append(dst.Items, item)
@@ -308,14 +313,29 @@ func mergeReviewFindings(dst *Findings, src Findings) {
 	}
 }
 
-func reviewFindingSeen(items []Finding, candidate Finding) bool {
-	for _, item := range items {
-		if item.File == candidate.File && item.Line == candidate.Line &&
-			strings.EqualFold(strings.TrimSpace(item.Description), strings.TrimSpace(candidate.Description)) {
-			return true
+func findReviewFinding(items []Finding, candidate Finding) *Finding {
+	for i := range items {
+		if items[i].File == candidate.File && items[i].Line == candidate.Line &&
+			strings.EqualFold(strings.TrimSpace(items[i].Description), strings.TrimSpace(candidate.Description)) {
+			return &items[i]
 		}
 	}
-	return false
+	return nil
+}
+
+// severityRank orders finding severities so duplicate findings keep the most
+// severe grade any reviewer assigned. Unknown severities rank lowest.
+func severityRank(severity string) int {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "error", "blocking", "critical":
+		return 3
+	case "warning":
+		return 2
+	case "info":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func riskRank(level string) int {

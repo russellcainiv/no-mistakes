@@ -30,6 +30,20 @@ func TestRespondRejectsSkipOnReview(t *testing.T) {
 	}
 }
 
+// TestSetSkippedStepsDropsMandatorySteps verifies the server-side backstop:
+// skip lists arriving over IPC (push options, rerun params) cannot skip the
+// review gate even though the CLI already filters them client-side.
+func TestSetSkippedStepsDropsMandatorySteps(t *testing.T) {
+	e := &Executor{}
+	e.SetSkippedSteps([]types.StepName{types.StepReview, types.StepLint})
+	if e.skips[types.StepReview] {
+		t.Fatal("mandatory review step must not be skippable via SetSkippedSteps")
+	}
+	if !e.skips[types.StepLint] {
+		t.Fatal("skippable lint step should remain skipped")
+	}
+}
+
 // TestRespondAllowsSkipOnSkippableStep confirms the guard is scoped to mandatory
 // steps only — a skippable step (lint) can still be skipped at its gate.
 func TestRespondAllowsSkipOnSkippableStep(t *testing.T) {
