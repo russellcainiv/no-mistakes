@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kunchenguid/no-mistakes/internal/scm"
 )
@@ -164,7 +165,17 @@ func toChecks(statuses []CommitStatus) []scm.Check {
 			}
 			seen[name] = struct{}{}
 		}
-		checks = append(checks, scm.Check{Name: name, Bucket: statusBucket(status.State)})
+		bucket := statusBucket(status.State)
+		// UpdatedAt doubles as the completion time for finished statuses; the
+		// CI monitor uses it to detect a re-run that failed again between
+		// polls (failingCheckCompletedAfter). Leave it zero while pending.
+		completedAt := time.Time{}
+		if bucket == scm.CheckBucketPass || bucket == scm.CheckBucketFail {
+			if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(status.UpdatedAt)); err == nil {
+				completedAt = parsed
+			}
+		}
+		checks = append(checks, scm.Check{Name: name, Bucket: bucket, CompletedAt: completedAt})
 	}
 	return checks
 }

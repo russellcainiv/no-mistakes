@@ -1141,6 +1141,47 @@ func TestCIStep_StampsGateSuccessWhenNoChecksReported(t *testing.T) {
 	}
 }
 
+func TestCIStep_StampsGateFailureWhenManualInterventionNeeded(t *testing.T) {
+	t.Parallel()
+	dir, baseSHA, headSHA := setupGitRepo(t)
+	// Completed failing checks with auto-fix disabled: the monitor gives up
+	// for manual intervention and must stamp failure, not leave the SHA
+	// statusless (or worse, carrying an earlier stale success).
+	checksSequence := []string{
+		`[{"name":"build","state":"FAILURE","bucket":"fail"}]`,
+	}
+	env := fakeCIGHSequence(t, "OPEN", checksSequence)
+
+	prURL := "https://github.com/test/repo/pull/42"
+	ag := &mockAgent{name: "test"}
+	sctx := newTestContext(t, ag, dir, baseSHA, headSHA, config.Commands{})
+	sctx.Env = env
+	sctx.Run.PRURL = &prURL
+	sctx.Config.CITimeout = 10 * time.Second
+	sctx.Config.AutoFix.CI = 0
+
+	var stamps []gateStamp
+	step := &CIStep{
+		postGateStatus: func(_ context.Context, _, _, sha, prURL string, success bool) (bool, error) {
+			stamps = append(stamps, gateStamp{sha, prURL, success})
+			return true, nil
+		},
+	}
+	outcome, err := step.Execute(sctx)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if outcome == nil || !outcome.NeedsApproval {
+		t.Fatalf("expected manual-intervention outcome, got %+v", outcome)
+	}
+	if len(stamps) != 1 {
+		t.Fatalf("gate stamped %d times, want one failure stamp: %+v", len(stamps), stamps)
+	}
+	if stamps[0].sha != headSHA || stamps[0].success {
+		t.Fatalf("stamp = %+v, want failure for %s", stamps[0], headSHA)
+	}
+}
+
 func TestCIStep_GateStampRetriesAfterPostError(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)

@@ -47,9 +47,11 @@ type CIStep struct {
 	// must not re-arm the timeout. Overridable for testing; defaults to
 	// fetching the upstream default branch.
 	baseBranchTip func(context.Context) (string, bool)
-	// gateStampedSHA is the head SHA the gate success status was last posted
-	// for, so the checks-passed decision point stamps each head commit once.
-	gateStampedSHA string
+	// gateStampedSHA/gateStampedSuccess record the last gate status posted, so
+	// each (head SHA, outcome) pair is stamped once and a flip (checks passing
+	// after a failure, or failing after a success) re-stamps the same SHA.
+	gateStampedSHA     string
+	gateStampedSuccess bool
 	// postGateStatus posts the no-mistakes/gate commit status for a head SHA.
 	// Overridable for testing; defaults to PostGateStatus.
 	postGateStatus func(ctx context.Context, upstreamURL, workDir, sha, prURL string, success bool) (bool, error)
@@ -145,6 +147,7 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 	timeoutOutcome := func() (*pipeline.StepOutcome, error) {
 		sctx.Log("CI timeout reached")
 		if len(timeoutFailingChecks) > 0 || timeoutMergeConflict {
+			s.stampGate(sctx, false)
 			return ciFailureOutcome(timeoutFailingChecks, timeoutMergeConflict, "CI timed out with known failures still present"), nil
 		}
 		if mergeabilityBlockedReason != "" {
@@ -281,15 +284,18 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 						s.lastFixedCompletedAt = fixCompletedAt
 					} else {
 						sctx.Log("CI fix produced no changes, returning for manual intervention...")
+						s.stampGate(sctx, false)
 						return ciFailureOutcome(failing, mergeConflict, "CI fix produced no changes - failures require manual intervention"), nil
 					}
 				} else if sctx.Fixing && fixKey == s.lastFixedChecks {
 					sctx.Log("fix already attempted for these issues, waiting for CI re-run...")
 				} else if ciFixLimit <= 0 {
 					sctx.Log(fmt.Sprintf("issues detected: %s - auto-fix disabled, waiting for manual intervention...", issueDesc))
+					s.stampGate(sctx, false)
 					return ciFailureOutcome(failing, mergeConflict, "CI failures require manual intervention"), nil
 				} else if s.ciFixAttempts >= ciFixLimit {
 					sctx.Log(fmt.Sprintf("issues detected: %s - max auto-fix attempts (%d) reached, waiting for manual intervention...", issueDesc, ciFixLimit))
+					s.stampGate(sctx, false)
 					return ciFailureOutcome(failing, mergeConflict, "CI failures still present after auto-fix attempts"), nil
 				} else if fixKey == s.lastFixedChecks {
 					sctx.Log("fix already attempted for these issues, waiting for CI re-run...")
@@ -326,10 +332,10 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					sctx.Log("no CI checks reported yet, waiting for checks to register...")
 				case len(checks) == 0:
 					lastMonitorLog = logCIMonitorStatus(sctx, ciNoChecksPassedMsg, lastMonitorLog)
-					s.stampGateSuccess(sctx)
+					s.stampGate(sctx, true)
 				default:
 					lastMonitorLog = logCIMonitorStatus(sctx, ciChecksPassedMsg, lastMonitorLog)
-					s.stampGateSuccess(sctx)
+					s.stampGate(sctx, true)
 				}
 			}
 		}
@@ -369,16 +375,19 @@ func logCIMonitorStatus(sctx *pipeline.StepContext, message, previous string) st
 	return message
 }
 
-// stampGateSuccess posts the required "no-mistakes/gate" success status as
-// soon as the monitor reaches the checks-passed decision point. Waiting for
-// the run's terminal outcome would deadlock behind Forgejo branch protection:
+// stampGate posts the required "no-mistakes/gate" commit status as soon as
+// the monitor reaches a decision point, instead of waiting for the run's
+// terminal outcome. Waiting would deadlock behind Forgejo branch protection:
 // the merge needs the status, the status waited on the terminal outcome, and
-// the terminal outcome waits on the merge. The daemon still posts the
-// terminal outcome afterwards, so a later failed fix round overwrites this
-// success. Best effort: a post error is logged and retried on the next poll.
-func (s *CIStep) stampGateSuccess(sctx *pipeline.StepContext) {
+// the terminal outcome waits on the merge. Success is stamped at the
+// checks-passed point; failure is stamped when the monitor gives up on
+// failing checks (manual intervention / timeout), so a run parked for a human
+// never advertises a stale success. The daemon still posts the terminal
+// outcome afterwards as the final overwrite. Best effort: a post error is
+// logged and retried on the next poll.
+func (s *CIStep) stampGate(sctx *pipeline.StepContext, success bool) {
 	sha := strings.TrimSpace(sctx.Run.HeadSHA)
-	if sha == "" || sha == s.gateStampedSHA {
+	if sha == "" || (sha == s.gateStampedSHA && success == s.gateStampedSuccess) {
 		return
 	}
 	post := s.postGateStatus
@@ -391,14 +400,19 @@ func (s *CIStep) stampGateSuccess(sctx *pipeline.StepContext) {
 	}
 	ctx, cancel := context.WithTimeout(sctx.Ctx, gateStatusPostTimeout)
 	defer cancel()
-	posted, err := post(ctx, sctx.Repo.UpstreamURL, sctx.WorkDir, sha, prURL, true)
+	posted, err := post(ctx, sctx.Repo.UpstreamURL, sctx.WorkDir, sha, prURL, success)
 	if err != nil {
 		sctx.Log(fmt.Sprintf("warning: could not post %s status: %v", gitea.GateContext, err))
 		return
 	}
-	s.gateStampedSHA = sha
-	if posted {
+	s.gateStampedSHA, s.gateStampedSuccess = sha, success
+	if !posted {
+		return
+	}
+	if success {
 		sctx.Log(fmt.Sprintf("posted %s success for %s so branch protection can merge", gitea.GateContext, shortSHA(sha)))
+	} else {
+		sctx.Log(fmt.Sprintf("posted %s failure for %s", gitea.GateContext, shortSHA(sha)))
 	}
 }
 

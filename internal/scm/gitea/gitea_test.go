@@ -92,6 +92,25 @@ func TestToChecksExcludesOwnGateStatus(t *testing.T) {
 	}
 }
 
+func TestToChecksMapsUpdatedAtToCompletedAt(t *testing.T) {
+	// Finished statuses carry UpdatedAt as their completion time (the CI
+	// monitor's re-run detection keys on it); pending ones stay zero.
+	statuses := []CommitStatus{
+		{Context: "build", State: "failure", UpdatedAt: "2026-07-09T22:00:00Z"},
+		{Context: "lint", State: "pending", UpdatedAt: "2026-07-09T22:01:00Z"},
+	}
+	checks := toChecks(statuses)
+	if len(checks) != 2 {
+		t.Fatalf("want 2 checks, got %+v", checks)
+	}
+	if checks[0].CompletedAt.IsZero() {
+		t.Errorf("failing check CompletedAt is zero, want parsed UpdatedAt")
+	}
+	if !checks[1].CompletedAt.IsZero() {
+		t.Errorf("pending check CompletedAt = %v, want zero", checks[1].CompletedAt)
+	}
+}
+
 func TestNormalizePRState(t *testing.T) {
 	merged := &PullRequest{State: "closed", Merged: true}
 	if got := normalizePRState(merged); got != scm.PRStateMerged {

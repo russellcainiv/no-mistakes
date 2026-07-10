@@ -524,6 +524,10 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 				if dbErr := m.db.UpdateRunErrorStatus(run.ID, errMsg, types.RunFailed); dbErr != nil {
 					slog.Error("failed to update run after panic", "run_id", run.ID, "error", dbErr)
 				}
+				// A panicking run is as terminal as a failed one — without this
+				// stamp a panic after commits were pushed leaves the head SHA
+				// statusless and branch protection deadlocks again.
+				postGateStatus(run, repo, wtDir, false)
 			}
 			cancel(nil)
 			ag.Close()
