@@ -1,0 +1,454 @@
+# Instincts generated from https://github.com/russellcainiv/no-mistakes
+# Generated: 2026-07-10T05:48:36.049Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: no-mistakes-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/russellcainiv/no-mistakes
+---
+
+# No Mistakes Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: fix, docs, feat
+
+## Evidence
+
+- 9 commits analyzed
+- Detected conventional commit pattern
+- Examples: docs(agents): add working-style rules — bias to action, full build, decision-block reply format, feat: Forgejo/Gitea provider, multi-reviewer panel, unskippable review gate
+
+---
+id: no-mistakes-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/russellcainiv/no-mistakes
+---
+
+# No Mistakes Commit Length
+
+## Action
+
+Write detailed commit messages (~144 characters for first line)
+
+## Evidence
+
+- Average commit message length: 144 chars
+- Based on 9 commits
+
+---
+id: no-mistakes-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/russellcainiv/no-mistakes
+---
+
+# No Mistakes Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: no-mistakes-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/russellcainiv/no-mistakes
+---
+
+# No Mistakes Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: no-mistakes-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/russellcainiv/no-mistakes
+---
+
+# No Mistakes Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: no-mistakes-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/russellcainiv/no-mistakes
+---
+
+# No Mistakes Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: no-mistakes-workflow-feature-development-with-tests-and-docs
+trigger: "when doing feature development with tests and docs"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/russellcainiv/no-mistakes
+---
+
+# No Mistakes Workflow Feature Development With Tests And Docs
+
+## Action
+
+Follow the feature-development-with-tests-and-docs workflow:
+1. Implement the new feature across relevant internal source files.
+2. Add or update corresponding tests in *_test.go files.
+3. Update or create documentation files (README.md, docs/*.md) to describe the new feature.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: internal/**/*.go, internal/**/*_test.go, docs/**/*.md
+
+---
+id: no-mistakes-workflow-bugfix-with-targeted-tests
+trigger: "when doing bugfix with targeted tests"
+confidence: 0.65
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/russellcainiv/no-mistakes
+---
+
+# No Mistakes Workflow Bugfix With Targeted Tests
+
+## Action
+
+Follow the bugfix-with-targeted-tests workflow:
+1. Update implementation files to resolve the bug.
+2. Add or update tests in *_test.go files to cover the bug scenario.
+3. Sometimes update related logic in closely associated files.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~3x per month
+- Files: internal/**/*.go, internal/**/*_test.go
+
+---
+id: no-mistakes-workflow-documentation-sync-with-code-changes
+trigger: "when doing documentation sync with code changes"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/russellcainiv/no-mistakes
+---
+
+# No Mistakes Workflow Documentation Sync With Code Changes
+
+## Action
+
+Follow the documentation-sync-with-code-changes workflow:
+1. Update or create relevant documentation files to describe new or changed features.
+2. Ensure documentation site builds cleanly and all anchor links resolve.
+3. Update provider tables, environment variable docs, and configuration references as needed.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: docs/**/*.md, docs/**/*.mjs, README.md
+
+---
+id: no-mistakes-instinct-file-naming
+trigger: "When creating or renaming a file in the codebase."
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: russellcainiv/no-mistakes
+---
+
+# No Mistakes Instinct File Naming
+
+## Action
+
+Use camelCase for file names.
+
+## Evidence
+
+- Pattern: namingConventions.files = camelCase
+
+---
+id: no-mistakes-instinct-function-naming
+trigger: "When defining a new function."
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: russellcainiv/no-mistakes
+---
+
+# No Mistakes Instinct Function Naming
+
+## Action
+
+Use camelCase for function names.
+
+## Evidence
+
+- Pattern: namingConventions.functions = camelCase
+
+---
+id: no-mistakes-instinct-class-naming
+trigger: "When defining a new class or struct."
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: russellcainiv/no-mistakes
+---
+
+# No Mistakes Instinct Class Naming
+
+## Action
+
+Use PascalCase for class or struct names.
+
+## Evidence
+
+- Pattern: namingConventions.classes = PascalCase
+
+---
+id: no-mistakes-instinct-constant-naming
+trigger: "When defining a constant."
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: russellcainiv/no-mistakes
+---
+
+# No Mistakes Instinct Constant Naming
+
+## Action
+
+Use SCREAMING_SNAKE_CASE for constant names.
+
+## Evidence
+
+- Pattern: namingConventions.constants = SCREAMING_SNAKE_CASE
+
+---
+id: no-mistakes-instinct-import-style
+trigger: "When importing modules or packages."
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: russellcainiv/no-mistakes
+---
+
+# No Mistakes Instinct Import Style
+
+## Action
+
+Use relative import paths.
+
+## Evidence
+
+- Pattern: importStyle = relative
+
+---
+id: no-mistakes-instinct-export-style
+trigger: "When exporting functions or variables."
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: russellcainiv/no-mistakes
+---
+
+# No Mistakes Instinct Export Style
+
+## Action
+
+Use named exports.
+
+## Evidence
+
+- Pattern: exportStyle = named
+
+---
+id: no-mistakes-instinct-test-location
+trigger: "When adding or updating tests."
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: russellcainiv/no-mistakes
+---
+
+# No Mistakes Instinct Test Location
+
+## Action
+
+Place test files in the same internal folder as the code, using *_test.go naming.
+
+## Evidence
+
+- Pattern: testLocation = separate
+- Files: internal/**/*_test.go
+
+---
+id: no-mistakes-instinct-test-for-bugfix
+trigger: "When fixing a bug."
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: russellcainiv/no-mistakes
+---
+
+# No Mistakes Instinct Test For Bugfix
+
+## Action
+
+Add or update a targeted test in a *_test.go file to cover the bug scenario.
+
+## Evidence
+
+- Workflow: bugfix-with-targeted-tests
+- Example: Add or update tests in *_test.go files to cover the bug scenario.
+
+---
+id: no-mistakes-instinct-test-for-feature
+trigger: "When implementing a new feature."
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: russellcainiv/no-mistakes
+---
+
+# No Mistakes Instinct Test For Feature
+
+## Action
+
+Add or update corresponding tests in *_test.go files.
+
+## Evidence
+
+- Workflow: feature-development-with-tests-and-docs
+- Example: Add or update corresponding tests in *_test.go files.
+
+---
+id: no-mistakes-instinct-git-commit-format
+trigger: "When writing a commit message."
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: russellcainiv/no-mistakes
+---
+
+# No Mistakes Instinct Git Commit Format
+
+## Action
+
+Use conventional commit format with a prefix (fix, docs, feat), optional scope, and a concise description.
+
+## Evidence
+
+- Pattern: commits.type = conventional
+- Pattern: commits.prefixes = [fix, docs, feat]
+- Example: fix(gate): resolve the stamp target from the registered upstream, not a forgejo remote
+
+---
+id: no-mistakes-instinct-feature-workflow
+trigger: "When adding a significant new feature or capability."
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: russellcainiv/no-mistakes
+---
+
+# No Mistakes Instinct Feature Workflow
+
+## Action
+
+Implement the feature in internal/**/*.go, add/update tests in *_test.go, and update documentation (README.md, docs/*.md).
+
+## Evidence
+
+- Workflow: feature-development-with-tests-and-docs
+- Example commit sequence: Implement feature, add/update tests, update docs
+
+---
+id: no-mistakes-instinct-bugfix-workflow
+trigger: "When fixing a bug or regression."
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: russellcainiv/no-mistakes
+---
+
+# No Mistakes Instinct Bugfix Workflow
+
+## Action
+
+Update implementation in internal/**/*.go, add/update tests in *_test.go, and update related logic if needed.
+
+## Evidence
+
+- Workflow: bugfix-with-targeted-tests
+- Example commit sequence: Update implementation, add/update tests, update related logic
+
+---
+id: no-mistakes-instinct-docs-sync-workflow
+trigger: "When code changes introduce new features or behaviors."
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: russellcainiv/no-mistakes
+---
+
+# No Mistakes Instinct Docs Sync Workflow
+
+## Action
+
+Update or create relevant documentation files (docs/**/*.md, README.md), ensure site builds cleanly, and update tables/config references.
+
+## Evidence
+
+- Workflow: documentation-sync-with-code-changes
+- Example commit sequence: Update docs, ensure build, update references
+
