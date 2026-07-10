@@ -3,6 +3,8 @@ package steps
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -999,6 +1001,51 @@ type gateStamp struct {
 	success bool
 }
 
+func TestPostGateStatusResolution(t *testing.T) {
+	calls := 0
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	t.Setenv("NO_MISTAKES_GITEA_API_TOKEN", "tok")
+	// Allowlist the httptest host so DetectProvider resolves the bare
+	// 127.0.0.1 upstream to Gitea — the same shape as a localhost Forgejo.
+	t.Setenv("NO_MISTAKES_GITEA_HOSTS", "127.0.0.1")
+
+	// Gitea upstream, no forgejo remote (run-worktree shape): stamps upstream.
+	plainDir := t.TempDir()
+	posted, err := PostGateStatus(context.Background(), srv.URL+"/russell/lvl2.git", plainDir, "abc123", "http://pr", true)
+	if err != nil || !posted {
+		t.Fatalf("gitea upstream: posted=%v err=%v, want posted", posted, err)
+	}
+	if gotPath != "/api/v1/repos/russell/lvl2/statuses/abc123" {
+		t.Errorf("path = %q", gotPath)
+	}
+
+	// Non-gitea upstream, no forgejo remote: nothing to stamp.
+	before := calls
+	posted, err = PostGateStatus(context.Background(), "https://github.com/o/r.git", plainDir, "abc123", "", true)
+	if posted || err != nil || calls != before {
+		t.Fatalf("github upstream, no mirror: posted=%v err=%v calls=%d, want no-op", posted, err, calls)
+	}
+
+	// Non-gitea upstream with a forgejo mirror remote: stamps the mirror.
+	mirrorDir := t.TempDir()
+	gitCmd(t, mirrorDir, "init")
+	gitCmd(t, mirrorDir, "remote", "add", "forgejo", srv.URL+"/russell/mirror.git")
+	posted, err = PostGateStatus(context.Background(), "https://github.com/o/r.git", mirrorDir, "abc123", "", true)
+	if err != nil || !posted {
+		t.Fatalf("forgejo mirror: posted=%v err=%v, want posted", posted, err)
+	}
+	if gotPath != "/api/v1/repos/russell/mirror/statuses/abc123" {
+		t.Errorf("mirror path = %q", gotPath)
+	}
+}
+
 func TestCIStep_StampsGateSuccessOncePerHeadSHA(t *testing.T) {
 	t.Parallel()
 	dir, baseSHA, headSHA := setupGitRepo(t)
@@ -1023,7 +1070,7 @@ func TestCIStep_StampsGateSuccessOncePerHeadSHA(t *testing.T) {
 	var stamps []gateStamp
 	pollCount := 0
 	step := &CIStep{
-		postGateStatus: func(_ context.Context, _, sha, prURL string, success bool) (bool, error) {
+		postGateStatus: func(_ context.Context, _, _, sha, prURL string, success bool) (bool, error) {
 			stamps = append(stamps, gateStamp{sha, prURL, success})
 			return true, nil
 		},
@@ -1070,7 +1117,7 @@ func TestCIStep_StampsGateSuccessWhenNoChecksReported(t *testing.T) {
 	pollCount := 0
 	step := &CIStep{
 		checksGracePeriod: time.Nanosecond,
-		postGateStatus: func(_ context.Context, _, sha, prURL string, success bool) (bool, error) {
+		postGateStatus: func(_ context.Context, _, _, sha, prURL string, success bool) (bool, error) {
 			stamps = append(stamps, gateStamp{sha, prURL, success})
 			return true, nil
 		},
@@ -1120,7 +1167,7 @@ func TestCIStep_GateStampRetriesAfterPostError(t *testing.T) {
 	posts := 0
 	pollCount := 0
 	step := &CIStep{
-		postGateStatus: func(_ context.Context, _, sha, _ string, _ bool) (bool, error) {
+		postGateStatus: func(_ context.Context, _, _, sha, _ string, _ bool) (bool, error) {
 			posts++
 			if posts == 1 {
 				return false, errors.New("forgejo unreachable")

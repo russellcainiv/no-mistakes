@@ -19,7 +19,6 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline/steps"
-	"github.com/kunchenguid/no-mistakes/internal/scm/gitea"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -561,7 +560,7 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			}
 			telemetry.Track("run", fields)
 			slog.Error("pipeline failed", "run_id", run.ID, "error", err)
-			postGateStatus(run, wtDir, false)
+			postGateStatus(run, repo, wtDir, false)
 		} else {
 			telemetry.Track("run", telemetry.Fields{
 				"action":      "finished",
@@ -574,7 +573,7 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 				"pr_created":  run.PRURL != nil && *run.PRURL != "",
 			})
 			slog.Info("pipeline completed", "run_id", run.ID)
-			postGateStatus(run, wtDir, true)
+			postGateStatus(run, repo, wtDir, true)
 		}
 	}()
 
@@ -582,27 +581,26 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 }
 
 // postGateStatus stamps the run's terminal outcome as a commit status on the
-// repo's Forgejo mirror, when a "forgejo" remote is configured. A Forgejo
-// branch-protection "required status check" (no-mistakes/gate) keys on this, so
-// a branch cannot merge into a protected branch unless the gate actually ran to
-// a terminal outcome — which closes the `git push --no-verify` bypass, because
-// the status is enforced server-side after the push lands.
+// repo's Gitea/Forgejo instance (the registered upstream, or a "forgejo"
+// mirror remote — see steps.PostGateStatus). A Forgejo branch-protection
+// "required status check" (no-mistakes/gate) keys on this, so a branch cannot
+// merge into a protected branch unless the gate actually ran — which closes
+// the `git push --no-verify` bypass, because the status is enforced
+// server-side after the push lands. The CI step stamps success earlier, at
+// the checks-passed decision point; this terminal post is the overwrite that
+// downgrades it when a later fix round fails.
 //
-// Best effort: an absent forgejo remote, a missing token, or an API error are
+// Best effort: an absent Forgejo target, a missing token, or an API error are
 // logged and ignored. Posting the gate status must never fail or block a run.
-func postGateStatus(run *db.Run, wtDir string, success bool) {
+func postGateStatus(run *db.Run, repo *db.Repo, wtDir string, success bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	forgejoURL, err := git.GetRemoteURL(ctx, wtDir, "forgejo")
-	if err != nil || strings.TrimSpace(forgejoURL) == "" {
-		return // no Forgejo mirror for this repo — nothing to stamp
-	}
 	targetURL := ""
 	if run.PRURL != nil {
 		targetURL = *run.PRURL
 	}
-	posted, err := gitea.PostGateStatus(ctx, forgejoURL, run.HeadSHA, targetURL, success)
+	posted, err := steps.PostGateStatus(ctx, repo.UpstreamURL, wtDir, run.HeadSHA, targetURL, success)
 	if err != nil {
 		slog.Warn("gate status post failed", "run_id", run.ID, "sha", run.HeadSHA, "err", err)
 		return

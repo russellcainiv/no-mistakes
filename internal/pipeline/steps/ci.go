@@ -51,9 +51,8 @@ type CIStep struct {
 	// for, so the checks-passed decision point stamps each head commit once.
 	gateStampedSHA string
 	// postGateStatus posts the no-mistakes/gate commit status for a head SHA.
-	// Overridable for testing; defaults to posting to the worktree's Forgejo
-	// mirror when one is configured.
-	postGateStatus func(ctx context.Context, workDir, sha, prURL string, success bool) (bool, error)
+	// Overridable for testing; defaults to PostGateStatus.
+	postGateStatus func(ctx context.Context, upstreamURL, workDir, sha, prURL string, success bool) (bool, error)
 }
 
 func (s *CIStep) Name() types.StepName { return types.StepCI }
@@ -384,7 +383,7 @@ func (s *CIStep) stampGateSuccess(sctx *pipeline.StepContext) {
 	}
 	post := s.postGateStatus
 	if post == nil {
-		post = postForgejoGateStatus
+		post = PostGateStatus
 	}
 	prURL := ""
 	if sctx.Run.PRURL != nil {
@@ -392,7 +391,7 @@ func (s *CIStep) stampGateSuccess(sctx *pipeline.StepContext) {
 	}
 	ctx, cancel := context.WithTimeout(sctx.Ctx, gateStatusPostTimeout)
 	defer cancel()
-	posted, err := post(ctx, sctx.WorkDir, sha, prURL, true)
+	posted, err := post(ctx, sctx.Repo.UpstreamURL, sctx.WorkDir, sha, prURL, true)
 	if err != nil {
 		sctx.Log(fmt.Sprintf("warning: could not post %s status: %v", gitea.GateContext, err))
 		return
@@ -403,12 +402,22 @@ func (s *CIStep) stampGateSuccess(sctx *pipeline.StepContext) {
 	}
 }
 
-// postForgejoGateStatus stamps the gate status on the repo's Forgejo mirror.
-// (false, nil) when no "forgejo" remote is configured in workDir.
-func postForgejoGateStatus(ctx context.Context, workDir, sha, prURL string, success bool) (bool, error) {
-	remoteURL, err := git.GetRemoteURL(ctx, workDir, "forgejo")
-	if err != nil || strings.TrimSpace(remoteURL) == "" {
+// PostGateStatus stamps the no-mistakes/gate commit status for sha on the
+// repo's Gitea/Forgejo instance. The instance is the registered upstream when
+// that is a Gitea/Forgejo URL; otherwise a "forgejo" remote configured in
+// workDir (the mirror convention for repos whose upstream lives elsewhere).
+// Run worktrees only carry "origin" and the gate remote, so resolving by
+// upstream is the path that actually fires for Forgejo-native repos.
+// (false, nil) when neither resolves — nothing to stamp.
+func PostGateStatus(ctx context.Context, upstreamURL, workDir, sha, prURL string, success bool) (bool, error) {
+	target := ""
+	if scm.DetectProvider(upstreamURL) == scm.ProviderGitea {
+		target = upstreamURL
+	} else if remoteURL, err := git.GetRemoteURL(ctx, workDir, "forgejo"); err == nil {
+		target = remoteURL
+	}
+	if strings.TrimSpace(target) == "" {
 		return false, nil
 	}
-	return gitea.PostGateStatus(ctx, remoteURL, sha, prURL, success)
+	return gitea.PostGateStatus(ctx, target, sha, prURL, success)
 }
