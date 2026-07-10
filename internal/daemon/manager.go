@@ -598,33 +598,22 @@ func postGateStatus(run *db.Run, wtDir string, success bool) {
 	if err != nil || strings.TrimSpace(forgejoURL) == "" {
 		return // no Forgejo mirror for this repo — nothing to stamp
 	}
-	ref, err := gitea.ParseRepoRef(forgejoURL)
-	if err != nil {
-		slog.Debug("gate status: cannot parse forgejo remote", "url", forgejoURL, "err", err)
-		return
-	}
-	client, err := gitea.NewClientFromEnv(nil, ref)
-	if err != nil {
-		slog.Debug("gate status: no forgejo token", "err", err)
-		return
-	}
-	sha := strings.TrimSpace(run.HeadSHA)
-	if sha == "" {
-		return
-	}
-	state, desc := "success", "no-mistakes gate passed"
-	if !success {
-		state, desc = "failure", "no-mistakes gate did not pass"
-	}
 	targetURL := ""
 	if run.PRURL != nil {
 		targetURL = *run.PRURL
 	}
-	if err := client.SetCommitStatus(ctx, ref, sha, state, "no-mistakes/gate", desc, targetURL); err != nil {
-		slog.Warn("gate status post failed", "run_id", run.ID, "sha", sha, "err", err)
+	posted, err := gitea.PostGateStatus(ctx, forgejoURL, run.HeadSHA, targetURL, success)
+	if err != nil {
+		slog.Warn("gate status post failed", "run_id", run.ID, "sha", run.HeadSHA, "err", err)
 		return
 	}
-	slog.Info("gate status posted", "run_id", run.ID, "sha", sha, "state", state)
+	if posted {
+		state := "success"
+		if !success {
+			state = "failure"
+		}
+		slog.Info("gate status posted", "run_id", run.ID, "sha", run.HeadSHA, "state", state)
+	}
 }
 
 func telemetryBranchRole(branch, defaultBranch string) string {

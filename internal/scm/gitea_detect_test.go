@@ -1,6 +1,10 @@
 package scm
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestDetectProviderGiteaMarkers(t *testing.T) {
 	cases := map[string]Provider{
@@ -18,6 +22,16 @@ func TestDetectProviderGiteaMarkers(t *testing.T) {
 }
 
 func TestDetectProviderGiteaEnvHosts(t *testing.T) {
+	// Hermetic: ignore this machine's real tea logins and env allowlist, both
+	// of which can legitimately mark localhost as Gitea outside the test.
+	// teaConfigPath falls through to the first config.yml that exists, so the
+	// stub file must exist or the real user config would still be read.
+	teaDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(teaDir, "config.yml"), []byte("logins: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TEA_CONFIG_HOME", teaDir)
+	t.Setenv("NO_MISTAKES_GITEA_HOSTS", "")
 	// A bare host with no marker resolves to Gitea only when listed in
 	// NO_MISTAKES_GITEA_HOSTS. Port is ignored in the comparison.
 	if got := DetectProvider("http://localhost:3000/russell/lvl2.git"); got == ProviderGitea {

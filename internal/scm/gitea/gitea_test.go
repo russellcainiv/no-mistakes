@@ -80,6 +80,18 @@ func TestToChecksKeepsNewestPerContext(t *testing.T) {
 	}
 }
 
+func TestToChecksExcludesOwnGateStatus(t *testing.T) {
+	// The gate's own stamp must not feed back into the CI monitor.
+	statuses := []CommitStatus{
+		{Context: GateContext, State: "failure"},
+		{Context: "build", State: "success"},
+	}
+	checks := toChecks(statuses)
+	if len(checks) != 1 || checks[0].Name != "build" {
+		t.Fatalf("want only the build check, got %+v", checks)
+	}
+}
+
 func TestNormalizePRState(t *testing.T) {
 	merged := &PullRequest{State: "closed", Merged: true}
 	if got := normalizePRState(merged); got != scm.PRStateMerged {

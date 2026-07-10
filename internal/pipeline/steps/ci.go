@@ -9,14 +9,17 @@ import (
 
 	"github.com/kunchenguid/no-mistakes/internal/cimonitor"
 	"github.com/kunchenguid/no-mistakes/internal/config"
+	"github.com/kunchenguid/no-mistakes/internal/git"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/scm"
+	"github.com/kunchenguid/no-mistakes/internal/scm/gitea"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 const (
 	defaultChecksGracePeriod          = 60 * time.Second
 	defaultBaseBranchTipResolveWindow = 30 * time.Second
+	gateStatusPostTimeout             = 15 * time.Second
 )
 
 // CI monitoring status messages. These are surfaced to the user and parsed by
@@ -44,6 +47,13 @@ type CIStep struct {
 	// must not re-arm the timeout. Overridable for testing; defaults to
 	// fetching the upstream default branch.
 	baseBranchTip func(context.Context) (string, bool)
+	// gateStampedSHA is the head SHA the gate success status was last posted
+	// for, so the checks-passed decision point stamps each head commit once.
+	gateStampedSHA string
+	// postGateStatus posts the no-mistakes/gate commit status for a head SHA.
+	// Overridable for testing; defaults to posting to the worktree's Forgejo
+	// mirror when one is configured.
+	postGateStatus func(ctx context.Context, workDir, sha, prURL string, success bool) (bool, error)
 }
 
 func (s *CIStep) Name() types.StepName { return types.StepCI }
@@ -317,8 +327,10 @@ func (s *CIStep) Execute(sctx *pipeline.StepContext) (*pipeline.StepOutcome, err
 					sctx.Log("no CI checks reported yet, waiting for checks to register...")
 				case len(checks) == 0:
 					lastMonitorLog = logCIMonitorStatus(sctx, ciNoChecksPassedMsg, lastMonitorLog)
+					s.stampGateSuccess(sctx)
 				default:
 					lastMonitorLog = logCIMonitorStatus(sctx, ciChecksPassedMsg, lastMonitorLog)
+					s.stampGateSuccess(sctx)
 				}
 			}
 		}
@@ -356,4 +368,47 @@ func logCIMonitorStatus(sctx *pipeline.StepContext, message, previous string) st
 		sctx.Log(message)
 	}
 	return message
+}
+
+// stampGateSuccess posts the required "no-mistakes/gate" success status as
+// soon as the monitor reaches the checks-passed decision point. Waiting for
+// the run's terminal outcome would deadlock behind Forgejo branch protection:
+// the merge needs the status, the status waited on the terminal outcome, and
+// the terminal outcome waits on the merge. The daemon still posts the
+// terminal outcome afterwards, so a later failed fix round overwrites this
+// success. Best effort: a post error is logged and retried on the next poll.
+func (s *CIStep) stampGateSuccess(sctx *pipeline.StepContext) {
+	sha := strings.TrimSpace(sctx.Run.HeadSHA)
+	if sha == "" || sha == s.gateStampedSHA {
+		return
+	}
+	post := s.postGateStatus
+	if post == nil {
+		post = postForgejoGateStatus
+	}
+	prURL := ""
+	if sctx.Run.PRURL != nil {
+		prURL = *sctx.Run.PRURL
+	}
+	ctx, cancel := context.WithTimeout(sctx.Ctx, gateStatusPostTimeout)
+	defer cancel()
+	posted, err := post(ctx, sctx.WorkDir, sha, prURL, true)
+	if err != nil {
+		sctx.Log(fmt.Sprintf("warning: could not post %s status: %v", gitea.GateContext, err))
+		return
+	}
+	s.gateStampedSHA = sha
+	if posted {
+		sctx.Log(fmt.Sprintf("posted %s success for %s so branch protection can merge", gitea.GateContext, shortSHA(sha)))
+	}
+}
+
+// postForgejoGateStatus stamps the gate status on the repo's Forgejo mirror.
+// (false, nil) when no "forgejo" remote is configured in workDir.
+func postForgejoGateStatus(ctx context.Context, workDir, sha, prURL string, success bool) (bool, error) {
+	remoteURL, err := git.GetRemoteURL(ctx, workDir, "forgejo")
+	if err != nil || strings.TrimSpace(remoteURL) == "" {
+		return false, nil
+	}
+	return gitea.PostGateStatus(ctx, remoteURL, sha, prURL, success)
 }

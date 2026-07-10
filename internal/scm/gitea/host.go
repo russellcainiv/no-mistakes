@@ -146,12 +146,18 @@ func normalizePRState(pr *PullRequest) scm.PRState {
 
 // toChecks collapses commit statuses to the newest status per context and maps
 // each to a normalized check. ListCommitStatuses returns newest-first, so the
-// first status seen for a context is the current one.
+// first status seen for a context is the current one. no-mistakes' own gate
+// stamp is excluded: it is not CI, and feeding it back into the CI monitor
+// would make no-mistakes react to its own outcome (e.g. auto-fixing a stale
+// gate failure left by a previous run on the same commit).
 func toChecks(statuses []CommitStatus) []scm.Check {
 	seen := make(map[string]struct{}, len(statuses))
 	checks := make([]scm.Check, 0, len(statuses))
 	for _, status := range statuses {
 		name := strings.TrimSpace(status.Context)
+		if name == GateContext {
+			continue
+		}
 		if name != "" {
 			if _, ok := seen[name]; ok {
 				continue
